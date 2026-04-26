@@ -60,11 +60,18 @@ function App() {
   const [loading, setLoading] = useState(true);
 
   const orderedTimeline = useMemo(() => sortByStartTime(timeline), [timeline]);
+  const firstRunnableBlock = useMemo(
+    () => orderedTimeline.find((block) => block.blockType !== "fixed_event"),
+    [orderedTimeline],
+  );
   const activeBlock = useMemo(
     () => orderedTimeline.find((block) => block.id === timer?.activeBlockId),
     [orderedTimeline, timer?.activeBlockId],
   );
-  const remainingSeconds = Math.max(durationInSeconds(activeBlock) - (timer?.elapsedSeconds ?? 0), 0);
+  const displayedBlock = activeBlock ?? firstRunnableBlock;
+  const remainingSeconds = Math.max(durationInSeconds(displayedBlock) - (activeBlock ? (timer?.elapsedSeconds ?? 0) : 0), 0);
+  const hasActiveBlock = Boolean(timer?.activeBlockId);
+  const timerIsRunningWithBlock = timer?.state === "running" && hasActiveBlock;
 
   useEffect(() => {
     const timerId = window.setInterval(() => {
@@ -73,7 +80,7 @@ function App() {
         return current > 0 ? current - 1 : 0;
       });
       setTimer((current) => {
-        if (!current || current.state !== "running") return current;
+        if (!current || current.state !== "running" || !current.activeBlockId) return current;
         return { ...current, elapsedSeconds: current.elapsedSeconds + 1 };
       });
     }, 1000);
@@ -154,7 +161,8 @@ function App() {
     setUnscheduledCount(planData.unscheduledTasks.length);
     const timelineRes = await fetch(`${API}/day/${today}/timeline`);
     const timelineData = (await timelineRes.json()) as { blocks: Block[] };
-    setTimeline(sortByStartTime(timelineData.blocks));
+    const regeneratedTimeline = sortByStartTime(timelineData.blocks);
+    setTimeline(regeneratedTimeline);
     setMode("timeline");
   }
 
@@ -385,7 +393,7 @@ function App() {
               <button onClick={togglePlanningTimer}>{planningTimerRunning ? "Pause" : "Start"}</button>
               <button onClick={resetPlanningTimer}>Reset</button>
             </div>
-            <p className="muted">Use this 10-minute timer to choose the most important work before saving the day.</p>
+            <p className="muted">Use this 10-minute timer to time box your planning session.</p>
           </div>
         </section>
       )}
@@ -409,11 +417,11 @@ function App() {
 
           <div className="active panel">
             <h3>Active timer</h3>
-            <p><strong>{activeBlock?.label ?? "No active block"}</strong></p>
+            <p><strong>{displayedBlock?.label ?? "No task ready"}</strong></p>
             <p>Remaining: {Math.floor(remainingSeconds / 60)}:{String(remainingSeconds % 60).padStart(2, "0")}</p>
             <p>State: {timer?.state ?? "idle"}</p>
             <div className="row">
-              <button onClick={() => void startTimer()} disabled={!timer || timer.state === "running"}>Start</button>
+              <button onClick={() => void startTimer()} disabled={!timer || timerIsRunningWithBlock}>Start</button>
               <button onClick={() => void togglePause()} disabled={!timer || timer.state === "idle" || timer.state === "completed"}>
                 {timer?.state === "paused" ? "Resume" : "Pause"}
               </button>
