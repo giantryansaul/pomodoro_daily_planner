@@ -73,6 +73,7 @@ app.put("/api/day/:date/tasks", (req, res) => {
   const incoming = Array.isArray(req.body.tasks) ? req.body.tasks : [];
   const now = nowIso();
   const tx = db.transaction(() => {
+    db.prepare("UPDATE schedule_blocks SET source_task_id = NULL WHERE day_plan_id = ?").run(dayPlan.id);
     db.prepare("DELETE FROM tasks WHERE day_plan_id = ?").run(dayPlan.id);
     const stmt = db.prepare(
       `INSERT INTO tasks
@@ -173,6 +174,7 @@ app.post("/api/day/:date/generate-plan", (req, res) => {
   const plan = generatePlan(req.params.date, tasks, events, dayPlan.id);
   const now = nowIso();
   const tx = db.transaction(() => {
+    db.prepare(`UPDATE timer_sessions SET active_block_id = NULL WHERE day_plan_id = ? AND active_block_id IN (SELECT id FROM schedule_blocks WHERE day_plan_id = ? AND status = 'planned')`).run(dayPlan.id, dayPlan.id);
     db.prepare("DELETE FROM schedule_blocks WHERE day_plan_id = ? AND status = 'planned'").run(dayPlan.id);
     const stmt = db.prepare(
       `INSERT INTO schedule_blocks
