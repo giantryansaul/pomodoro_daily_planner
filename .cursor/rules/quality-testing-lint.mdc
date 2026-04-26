@@ -1,0 +1,24 @@
+---
+description: Run lint and tests regularly; cover business logic with unit tests
+alwaysApply: true
+---
+
+# Quality — linting, tests, and business logic
+
+## Run checks for the repo
+
+- **Proactively** run the project’s **linter** and **unit tests** after meaningful edits (or when preparing a change for handoff), using the commands defined in the repo (`package.json`, `Makefile`, `pyproject.toml`, CI config, etc.).
+- If a command fails, **fix or report** with concrete errors before considering the task done.
+- Prefer the same commands **CI** uses so local results match the pipeline.
+
+## Unit tests and business logic
+
+- Add or update **unit tests** for **business rules**, domain logic, transforms, validations, and non-trivial branches—not only for glue code.
+- Tests should be **deterministic**, **isolated** from network and production data where possible, and **named** so failures explain what broke.
+- Cover **negative scenarios** and **failure modes** (invalid input, error paths, boundary conditions), not only happy-path behavior.
+- When fixing a bug, include a **regression test** when practical.
+
+## Scope
+
+- Do not skip tests for “small” changes if they touch behavior users rely on.
+- If the repo has no test runner yet, say so and suggest the minimal standard for the stack—do not invent a whole framework without alignment.

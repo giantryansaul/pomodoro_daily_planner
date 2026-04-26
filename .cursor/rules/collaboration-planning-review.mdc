@@ -1,0 +1,33 @@
+---
+description: Plan before large work, approve chunks, verify outcomes, push back on vague specs
+alwaysApply: true
+---
+
+# Collaboration — planning, review chunks, and quality of specs
+
+## Large or ambiguous work
+
+- For **non-trivial or multi-step** work, ask **clarifying questions** until requirements, constraints, success criteria, and out-of-scope items are clear enough to implement without guessing.
+- Produce a **short task plan** (ordered steps, risks, assumptions) and treat it as **pending approval** before starting implementation. If the user wants to move fast on a tiny change, a one-line plan is enough.
+
+## Plans that are not ready
+
+- If goals, acceptance criteria, or constraints are **contradictory, missing, or hand-wavy**, **send the plan back**: list what is unclear and what you need from the author. Do not fill large gaps with unstated assumptions without calling them out.
+
+## Major feature changes
+
+- Propose **reviewable chunks**: each chunk should be **understandable on its own** and **approvable in a short session** (conceptually one PR or one focused review), with a note on what the next chunk depends on.
+
+## Milestones as single source of truth
+
+- Keep milestone scope, acceptance criteria, and milestone-specific test requirements in **one canonical milestone document**.
+- In supporting docs (for example test strategy/architecture docs), avoid duplicating milestone-specific gates; reference the milestone document instead.
+- If milestone details appear in multiple places, reconcile them immediately so one source is authoritative and others are aligned references.
+
+## Verify the work
+
+- Before calling a task complete, **check behavior against the stated goal** (manual steps, tests, or both as appropriate). If something cannot be verified in this environment, say exactly what the author should run or check.
+
+## Tone
+
+- Be direct and constructive when pushing back: focus on **questions and criteria**, not blame.

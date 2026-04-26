@@ -1,0 +1,47 @@
+---
+description: Prefer TypeScript and typed React; avoid new plain JavaScript
+globs: "**/*.{ts,tsx,js,jsx,mjs,cjs}"
+alwaysApply: false
+---
+
+# Web stack — TypeScript and typed React
+
+## TypeScript over JavaScript
+
+- **New code**: Use TypeScript (`.ts` / `.tsx`). Do not add new application logic in `.js` / `.jsx` unless the repo already mandates it for a specific integration.
+- **Existing JS**: When editing legacy JavaScript, prefer migrating touched modules to TypeScript in the same change when scope is small; otherwise add a short comment or follow-up note if migration is out of scope.
+- **Config-only exceptions**: `eslint.config.js`, small tooling scripts, or files a tool requires to be JS are fine; keep them minimal and typed where the toolchain allows (e.g. JSDoc or `// @ts-check`).
+
+## React
+
+- Use **`.tsx`** for components and hooks that return JSX.
+- Prefer **hooks + function components** over class-based React components for new and refactored UI code.
+- **Type props and state** explicitly (`Props`, `useState<MyType>`, generics on hooks/callbacks). Avoid `any`; use `unknown` and narrow, or domain types.
+- Prefer **function components** with typed event handlers (e.g. `React.ChangeEvent<HTMLInputElement>`).
+
+## Function style
+
+- Use `function` for named declarations (module-level helpers, exported functions, and React components).
+- Use arrow functions (`=>`) for inline callbacks and local closures (array methods, hook callbacks, and inline event handlers).
+- Rule of thumb: "Name it with `function`; pass it with `=>`."
+
+## Variable naming
+
+- Prefer intention-revealing names that communicate purpose in local context without requiring extra scanning.
+- Name variables for the data they hold, not just the operation that produced them (for example, use `sortedEvents` instead of `sorted`).
+- Include a domain noun in intermediate collections and transformed results (`pendingTasks`, `activeBlock`, `eventsByDay`).
+- Allow short names only for conventional throwaway cases (`i` in tight loops, `id`, `url`, `db`, React event arguments in tiny handlers).
+- If a name needs a comment to explain basic purpose, rename the variable first.
+
+## Design and styling
+
+- Prefer **Tailwind CSS** for UI styling when possible and aligned with the repo stack.
+- Keep Tailwind usage readable: group related utilities, extract repeated patterns into reusable components or helpers, and avoid overly long class strings when abstraction improves clarity.
+
+## Quick checklist
+
+- [ ] No unnecessary new `.js`/`.jsx` source files
+- [ ] Exported components and public hooks have clear types
+- [ ] Variable names are intention-revealing in function scope
+- [ ] `any` only where unavoidable and documented
+- [ ] Tailwind is used for styling when practical

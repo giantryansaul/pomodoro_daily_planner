@@ -1,0 +1,40 @@
+---
+description: Commit workflow, branch strategy, secret scanning, and commit message format
+alwaysApply: true
+---
+
+# Commits and branch workflow
+
+## Safety before commit and push
+
+- API tokens and other secrets must **never** be committed.
+- Run a **secret scan before each commit**; if findings exist, do not commit until resolved.
+- Do not push to a remote repository without explicit user confirmation in the current session.
+
+## Branching and cadence
+
+- Commit work regularly in small, coherent changesets.
+- Use feature/topic branches for new feature work so the base branch remains stable and easy to restore.
+- Keep each commit logically scoped so reviewers can understand intent quickly.
+
+## Merge strategy
+
+- When merging a feature branch into `main`, prefer **squash merge** into logical commit areas that preserve a clear narrative for future readers.
+- Ensure the final commit sequence makes it easy to understand what changed and why.
+
+## Commit message convention
+
+- Use Conventional Commit style:
+  - `<type>(<optional-scope>): <description>`
+- Prefer types such as: `fix`, `feat`, `perf`, `style`, `docs`, `ops`, `chore`, `refactor`, `test`, `build`.
+- Write subject lines in imperative, present tense and keep them concise.
+
+## Agent and model attribution in commit message
+
+- Include tool and model metadata in the commit body or footer.
+- Preferred footer format:
+  - `Agent-Tool: <cursor|claude-code|other>`
+  - `Agent-Model: <model-name>`
+- Example:
+  - `Agent-Tool: cursor`
+  - `Agent-Model: claude-opus`

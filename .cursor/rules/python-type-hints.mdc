@@ -1,0 +1,30 @@
+---
+description: Readable Pythonic code, clear names, and practical type hints
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# Python — readability, Pythonic style, and types
+
+## Readability and naming
+
+- Prefer **simple, idiomatic Python**: straightforward control flow, early returns, comprehensions only when they stay readable, standard library and well-known patterns over clever tricks.
+- **Variable and function names** should read naturally at the call site: full words, `snake_case`, avoid abbreviations unless they are universal (`id`, `url`, `http`). Prefer `active_users` over `au` or `usr_lst`.
+- Keep functions **short enough to name accurately**; if the name needs “and”, consider splitting.
+
+## Types (support clarity, not ceremony)
+
+- Add **type hints** for function parameters, return values, and important module-level variables.
+- Prefer **`list[str]`**, **`dict[str, Any]`** (sparingly), **`X | Y`**, and **`X | None`** over `typing.List`, `Optional`, etc., on Python 3.10+; match the **runtime Python version** declared for the project.
+- Use **`TypedDict`**, **`Protocol`**, **`dataclass`**, or **Pydantic models** where they clarify domain shapes better than loose dicts—only where they reduce confusion, not everywhere by default.
+- For public APIs and complex logic, types should make invalid states hard to represent.
+
+## What to avoid
+
+- Untyped public functions or large untyped blocks in business logic.
+- Bare `Any` without a comment explaining why a narrower type is impossible.
+- Obscure one-liners and heavy metaprogramming when a plain loop or small function is easier to read.
+
+## Tests
+
+- When types are insufficient, **tests** should cover behavior; keep types and tests aligned as the contract evolves.
