@@ -10,6 +10,14 @@ import type {
   TimerSession,
 } from "./types.js";
 
+function byStartTime<T extends { startTimeIso: string }>(left: T, right: T): number {
+  return new Date(left.startTimeIso).getTime() - new Date(right.startTimeIso).getTime();
+}
+
+function eventKey(event: EventInput): string {
+  return `${event.title.trim()}|${event.startTimeIso}|${event.endTimeIso}`;
+}
+
 export const dayPlanDao = {
   getOrCreate(dateIso: string): { id: string; dateIso: string } {
     const existing = db
@@ -112,12 +120,13 @@ export const recurringDao = {
 
 export const eventDao = {
   listForDay(dayPlanId: string): FixedEvent[] {
-    return db
+    const events = db
       .prepare(
         `SELECT id, day_plan_id as dayPlanId, title, start_time_iso as startTimeIso, end_time_iso as endTimeIso
          FROM fixed_events WHERE day_plan_id = ? ORDER BY start_time_iso ASC`,
       )
       .all(dayPlanId) as FixedEvent[];
+    return events.sort(byStartTime);
   },
 
   replaceAll(dayPlanId: string, events: EventInput[]): void {
@@ -127,8 +136,17 @@ export const eventDao = {
     );
     const tx = db.transaction(() => {
       db.prepare("DELETE FROM fixed_events WHERE day_plan_id = ?").run(dayPlanId);
+      const seen = new Set<string>();
       events.forEach((event) => {
-        stmt.run(crypto.randomUUID(), dayPlanId, event.title, event.startTimeIso, event.endTimeIso, now, now);
+        const title = event.title.trim();
+        const start = new Date(event.startTimeIso).getTime();
+        const end = new Date(event.endTimeIso).getTime();
+        const key = eventKey(event);
+        if (!title || Number.isNaN(start) || Number.isNaN(end) || start >= end || seen.has(key)) {
+          return;
+        }
+        seen.add(key);
+        stmt.run(crypto.randomUUID(), dayPlanId, title, event.startTimeIso, event.endTimeIso, now, now);
       });
     });
     tx();
@@ -137,7 +155,7 @@ export const eventDao = {
 
 export const scheduleBlockDao = {
   listForDay(dayPlanId: string): ScheduleBlock[] {
-    return db
+    const blocks = db
       .prepare(
         `SELECT id, day_plan_id as dayPlanId, source_task_id as sourceTaskId, block_type as blockType,
          label, start_time_iso as startTimeIso, end_time_iso as endTimeIso, sequence_index as sequenceIndex,
@@ -145,6 +163,7 @@ export const scheduleBlockDao = {
          FROM schedule_blocks WHERE day_plan_id = ? ORDER BY start_time_iso ASC`,
       )
       .all(dayPlanId) as ScheduleBlock[];
+    return blocks.sort(byStartTime);
   },
 
   replacePlanned(dayPlanId: string, blocks: ScheduleBlock[]): void {

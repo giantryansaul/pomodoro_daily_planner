@@ -61,33 +61,29 @@ If any item is unresolved, treat execution work as blocked and continue specific
 - Restart persistence test confirms data durability.
 - API contract tests verify success and error payload shapes.
 
-## Milestone 3: Strict daily setup flow (pre-generation)
+## Milestone 3: Daily editing workspace (pre-generation)
 
 ### Scope
 
-- Build strict sequence wizard:
-  1. Task prioritize (10-minute planning timer)
-  2. Recurring checklist review
-  3. Fixed event input
-  4. Plan generation preflight (validation + handoff to generation endpoint)
-- Add flow guards to prevent skipping required steps.
-- Persist and recover wizard state across refresh/restart:
-  - selected date
-  - current step
-  - per-step completion flags
-  - required data-valid state for each step
-- Freeze API/UI contract for wizard payloads and validation errors.
+- Build same-page editing workspace with three visible edit panels:
+  - tasks
+  - recurring daily items
+  - manual calendar events
+- Add paused-by-default 10-minute planning timer with start/pause/reset controls.
+- Add Save Day flow that persists inputs and hands off to generation endpoint.
+- Default to editing mode when no generated timeline exists for the day.
+- Freeze API/UI contract for Save Day payloads and validation errors.
 
 ### Exit criteria
 
-- User can complete setup steps through preflight without skipping requirements.
-- Step state is recoverable after refresh.
-- Required-step validation failures are user-visible and deterministic.
+- User can complete setup in one workspace and generate a timeline.
+- Planning timer does not start until the user starts it.
+- Required input validation failures are user-visible and deterministic.
 
 ### Testing required for milestone sign-off
 
-- Strict flow integration tests pass for required sequencing and blocking rules.
-- Refresh/restart recovery tests validate persisted wizard state fields.
+- Editing workspace tests cover all three panels and Save Day behavior.
+- Refresh/restart tests validate persisted day inputs and generated timeline recovery.
 - Validation error UX is covered by component/integration tests.
 
 ## Milestone 4: Planner engine
@@ -95,7 +91,7 @@ If any item is unresolved, treat execution work as blocked and continue specific
 ### Scope
 
 - Implement deterministic scheduling behavior from `docs/planner-engine.md`.
-- Wire strict-flow "Generate plan" action to real engine output.
+- Wire Save Day generation action to real engine output.
 - Add overflow reporting and user-facing warnings.
 - Persist generated schedule blocks.
 - Define and implement regeneration rules when execution already started.
@@ -130,7 +126,10 @@ This milestone is split into UI-focused sub-chunks:
 4. **Recovery and continuity**
    - Rehydrate active session on refresh/restart.
    - Keep timeline and timer synchronized.
-5. **Polish and accessibility**
+5. **Timeline editing**
+   - Edit Timeline for Day reopens the editing workspace.
+   - Save Day recalculates the timeline without duplicate events or stale blocks.
+6. **Polish and accessibility**
    - Keyboard-safe controls, focus states, readable contrast.
 
 ### Exit criteria
@@ -138,11 +137,13 @@ This milestone is split into UI-focused sub-chunks:
 - Two-panel layout works across normal desktop widths.
 - Active timer always reflects backend state.
 - Completed blocks are reflected in timeline status.
+- Timeline entries are rendered chronologically after generation and regeneration.
 
 ### Testing required for milestone sign-off
 
 - UI tests verify timeline and timer synchronization.
 - Timer control tests cover start/pause/resume/skip transitions.
+- Regeneration tests cover duplicate prevention and chronological ordering.
 - Accessibility checks validate keyboard navigation and visible focus.
 
 ## Milestone 6: QA hardening and release readiness

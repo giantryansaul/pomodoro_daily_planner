@@ -2,13 +2,12 @@
 
 ## Purpose
 
-Morning Planner is a local-first web app for starting the day with a clear plan. It guides the user through a strict morning flow:
+Morning Planner is a local-first web app for starting the day with a clear plan. It guides the user through a focused morning flow:
 
-1. Spend 10 minutes selecting the most important tasks.
-2. Review and check off recurring daily tasks.
-3. Enter fixed events (meetings, appointments) for the day.
-4. Generate a Pomodoro-based timeline around those constraints.
-5. Execute the day with a live active-task timer view.
+1. Use a paused-by-default 10-minute planning timer to choose the day intentionally.
+2. Edit tasks, recurring items, and known calendar events on one planning page.
+3. Save the day to generate a Pomodoro-based timeline around those constraints.
+4. Execute the day with a chronological timeline and live active-task timer view.
 
 The first release is single-user and local-only. It is intentionally designed so calendar and Obsidian integrations can be added later without rewriting the core planner.
 
@@ -28,11 +27,12 @@ If you are making changes, start here and follow this order:
 - React + TypeScript + Vite frontend.
 - Thin local Node backend started together with the app.
 - File-backed SQLite persistence via `better-sqlite3`.
-- Strict guided daily planning sequence.
+- Same-page daily editing workspace with task, recurring, and event panels.
 - Daily recurring checklist with per-day completion.
 - Manual fixed-event input for schedule constraints.
 - Pomodoro schedule generation with 25/5 defaults.
 - Left timeline list and right active timer panel.
+- Timeline edit/recalculate flow for revising the day after generation.
 
 ### Out of scope for v1
 
@@ -83,7 +83,7 @@ See `docs/milestones.md` for full details. Current milestone sequence:
 
 1. Foundation and documentation.
 2. Data model and persistence.
-3. Strict daily setup flow (pre-generation).
+3. Daily editing workspace (pre-generation).
 4. Pomodoro planning engine + generation wiring.
 5. Timeline and active timer UI.
 6. QA hardening and release readiness.

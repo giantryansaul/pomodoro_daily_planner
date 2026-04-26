@@ -26,7 +26,7 @@ header h1 {
   margin: 0;
 }
 
-.wizard,
+.editing-layout,
 .execution {
   margin-top: 1rem;
 }
@@ -44,6 +44,35 @@ header h1 {
   gap: 1rem;
 }
 
+.editing-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 1rem;
+  align-items: start;
+}
+
+.edit-panels {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.section-heading h2 {
+  margin: 0;
+}
+
+.section-heading p {
+  margin: 0.25rem 0 0;
+}
+
 .row {
   display: flex;
   gap: 0.5rem;
@@ -59,13 +88,57 @@ button {
   font-size: 0.95rem;
 }
 
+input {
+  min-width: 0;
+}
+
 button {
   cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 ul,
 ol {
   padding-left: 1.2rem;
+}
+
+.editable-list {
+  display: grid;
+  gap: 0.75rem;
+  padding-left: 1rem;
+}
+
+.item-row,
+.edit-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.item-row span:first-child,
+.edit-row input:first-child {
+  flex: 1 1 160px;
+}
+
+.muted {
+  color: #6b7280;
+  font-size: 0.9rem;
+}
+
+.timer-card {
+  position: sticky;
+  top: 1rem;
+}
+
+.timer-display {
+  font-size: 3rem;
+  font-weight: 700;
+  margin: 0.5rem 0 1rem;
 }
 
 .warning {
@@ -79,4 +152,16 @@ ol {
 
 .active {
   background: #eef2ff;
+}
+
+@media (max-width: 900px) {
+  .editing-layout,
+  .execution,
+  .edit-panels {
+    grid-template-columns: 1fr;
+  }
+
+  .timer-card {
+    position: static;
+  }
 }

@@ -17,6 +17,10 @@ function addMinutes(start: Date, minutes: number): Date {
   return new Date(start.getTime() + minutes * 60_000);
 }
 
+function timeValue(iso: string): number {
+  return new Date(iso).getTime();
+}
+
 function makeIsoAtDate(dateIso: string, timeHHMM: string): string {
   return `${dateIso}T${timeHHMM}:00`;
 }
@@ -24,7 +28,7 @@ function makeIsoAtDate(dateIso: string, timeHHMM: string): string {
 function buildWindows(dateIso: string, events: FixedEvent[]): Window[] {
   const dayStart = new Date(makeIsoAtDate(dateIso, "07:00"));
   const dayEnd = new Date(makeIsoAtDate(dateIso, "22:00"));
-  const sortedEvents = [...events].sort((a, b) => a.startTimeIso.localeCompare(b.startTimeIso));
+  const sortedEvents = [...events].sort((a, b) => timeValue(a.startTimeIso) - timeValue(b.startTimeIso));
   const windows: Window[] = [];
   let cursor = dayStart;
 
@@ -62,7 +66,7 @@ function windowFits(window: Window, minutes: number): boolean {
 
 function addFixedEventBlocks(fixedEvents: FixedEvent[], dayPlanId: string, blocks: ScheduleBlock[]): void {
   fixedEvents
-    .sort((a, b) => a.startTimeIso.localeCompare(b.startTimeIso))
+    .sort((a, b) => timeValue(a.startTimeIso) - timeValue(b.startTimeIso))
     .forEach((event, idx) => {
       blocks.push({
         id: crypto.randomUUID(),
@@ -129,7 +133,7 @@ function scheduleFocusAndBreak(
 }
 
 function sortAndReindexBlocks(blocks: ScheduleBlock[]): ScheduleBlock[] {
-  const blocksSortedByStartTime = blocks.sort((a, b) => a.startTimeIso.localeCompare(b.startTimeIso));
+  const blocksSortedByStartTime = blocks.sort((a, b) => timeValue(a.startTimeIso) - timeValue(b.startTimeIso));
   blocksSortedByStartTime.forEach((block, index) => {
     block.sequenceIndex = index;
   });

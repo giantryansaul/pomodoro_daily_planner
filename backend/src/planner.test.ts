@@ -37,4 +37,41 @@ describe("generatePlan", () => {
     const result = generatePlan("2026-04-25", tasks, fixedEvents, "day-1");
     expect(result.unscheduledTasks.length).toBeGreaterThan(0);
   });
+
+  it("orders generated focus blocks before later fixed events chronologically", () => {
+    const tasks = [makeTask("a", "First focus", 1)];
+    const fixedEvents: FixedEvent[] = [
+      {
+        id: "evt-1",
+        dayPlanId: "day-1",
+        title: "Nine AM meeting",
+        startTimeIso: "2026-04-25T09:00:00",
+        endTimeIso: "2026-04-25T09:30:00",
+      },
+    ];
+
+    const result = generatePlan("2026-04-25", tasks, fixedEvents, "day-1");
+
+    expect(result.blocks[0].label).toBe("First focus");
+    expect(result.blocks.map((block) => block.label)).toContain("Nine AM meeting");
+  });
+
+  it("keeps fixed events represented once on repeated generation", () => {
+    const tasks = [makeTask("a", "First focus", 1)];
+    const fixedEvents: FixedEvent[] = [
+      {
+        id: "evt-1",
+        dayPlanId: "day-1",
+        title: "Calendar hold",
+        startTimeIso: "2026-04-25T11:00:00",
+        endTimeIso: "2026-04-25T11:30:00",
+      },
+    ];
+
+    const firstResult = generatePlan("2026-04-25", tasks, fixedEvents, "day-1");
+    const secondResult = generatePlan("2026-04-25", tasks, fixedEvents, "day-1");
+
+    expect(firstResult.blocks.filter((block) => block.label === "Calendar hold")).toHaveLength(1);
+    expect(secondResult.blocks.filter((block) => block.label === "Calendar hold")).toHaveLength(1);
+  });
 });

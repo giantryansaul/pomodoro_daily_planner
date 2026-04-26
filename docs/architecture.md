@@ -203,17 +203,29 @@ Endpoint shape can evolve, but domain separation should remain stable.
   - not-found/conflict error shape (when applicable)
   - stable field naming and nullability policy
 
-## Strict-flow state model
+## Daily editing and timeline state model
 
-Wizard progress is persisted in backend-owned state so refresh/restart is recoverable:
+The frontend presents a day in one of two UI modes:
 
-- selected day key
-- current step id
-- per-step completion flags
-- step validation status and blocking reasons
-- last successful "preflight ready for generation" timestamp
+- **Editing mode**: task edits, recurring eliminations, manual events, and the paused-by-default planning timer.
+- **Timeline mode**: generated chronological timeline plus execution timer controls.
 
-Frontend may cache for UX responsiveness, but backend persisted state is authoritative.
+The mode is derived from persisted backend state on load:
+
+- If no timeline blocks exist for the day, open editing mode.
+- If timeline blocks exist, open timeline mode.
+- `Edit Timeline for Day` switches the UI back to editing mode without changing persistence until Save Day.
+
+Save Day performs one idempotent regeneration flow:
+
+1. Replace day tasks from the submitted task list.
+2. Update day-specific recurring item completion/elimination states.
+3. Replace fixed events from the submitted event list.
+4. Generate a new plan from the latest persisted inputs.
+5. Replace prior planned timeline blocks for the day.
+6. Return the timeline sorted by normalized timestamp.
+
+This flow must not append duplicate fixed events or leave stale planned blocks after refresh/re-save. Frontend may cache form state for UX responsiveness, but backend persisted state remains authoritative.
 
 ## Definition of done evidence
 

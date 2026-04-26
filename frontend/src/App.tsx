@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-type TaskInput = { title: string; estimatedPomodoros?: number };
+type AppMode = "editing" | "timeline";
+type TaskInput = { clientId: string; title: string; estimatedPomodoros?: number };
 type RecurringItem = { id: string; titleSnapshot: string; isCompleted: boolean };
-type EventInput = { title: string; startTime: string; endTime: string };
+type EventInput = { clientId: string; title: string; startTime: string; endTime: string };
 type Block = {
   id: string;
   blockType: "focus" | "break" | "fixed_event";
@@ -19,9 +20,18 @@ type TimerSession = {
 
 const API = "http://localhost:3001/api";
 const today = new Date().toISOString().slice(0, 10);
+const PLANNING_TIMER_SECONDS = 10 * 60;
+
+function newClientId(): string {
+  return crypto.randomUUID();
+}
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function sortByStartTime<T extends { startTimeIso: string }>(items: T[]): T[] {
+  return [...items].sort((a, b) => new Date(a.startTimeIso).getTime() - new Date(b.startTimeIso).getTime());
 }
 
 function durationInSeconds(block?: Block): number {
@@ -30,31 +40,45 @@ function durationInSeconds(block?: Block): number {
 }
 
 function App() {
-  const [step, setStep] = useState(1);
-  const [planningSecondsLeft, setPlanningSecondsLeft] = useState(10 * 60);
+  const [mode, setMode] = useState<AppMode>("editing");
+  const [planningSecondsLeft, setPlanningSecondsLeft] = useState(PLANNING_TIMER_SECONDS);
+  const [planningTimerRunning, setPlanningTimerRunning] = useState(false);
   const [tasks, setTasks] = useState<TaskInput[]>([]);
   const [taskDraft, setTaskDraft] = useState("");
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [recurring, setRecurring] = useState<RecurringItem[]>([]);
   const [events, setEvents] = useState<EventInput[]>([]);
-  const [eventDraft, setEventDraft] = useState<EventInput>({ title: "", startTime: "09:00", endTime: "09:30" });
+  const [eventDraft, setEventDraft] = useState<EventInput>({
+    clientId: newClientId(),
+    title: "",
+    startTime: "09:00",
+    endTime: "09:30",
+  });
   const [timeline, setTimeline] = useState<Block[]>([]);
   const [timer, setTimer] = useState<TimerSession | null>(null);
   const [unscheduledCount, setUnscheduledCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  const activeBlock = useMemo(() => timeline.find((block) => block.id === timer?.activeBlockId), [timeline, timer?.activeBlockId]);
+  const orderedTimeline = useMemo(() => sortByStartTime(timeline), [timeline]);
+  const activeBlock = useMemo(
+    () => orderedTimeline.find((block) => block.id === timer?.activeBlockId),
+    [orderedTimeline, timer?.activeBlockId],
+  );
   const remainingSeconds = Math.max(durationInSeconds(activeBlock) - (timer?.elapsedSeconds ?? 0), 0);
 
   useEffect(() => {
     const timerId = window.setInterval(() => {
-      setPlanningSecondsLeft((current) => (current > 0 ? current - 1 : 0));
+      setPlanningSecondsLeft((current) => {
+        if (!planningTimerRunning) return current;
+        return current > 0 ? current - 1 : 0;
+      });
       setTimer((current) => {
         if (!current || current.state !== "running") return current;
         return { ...current, elapsedSeconds: current.elapsedSeconds + 1 };
       });
     }, 1000);
     return () => window.clearInterval(timerId);
-  }, []);
+  }, [planningTimerRunning]);
 
   const loadDay = useCallback(async (): Promise<void> => {
     const [tasksRes, recurringRes, eventsRes, timelineRes, timerRes] = await Promise.all([
@@ -68,23 +92,27 @@ function App() {
     const tasksData = await tasksRes.json();
     const recurringData = await recurringRes.json();
     const eventsData = await eventsRes.json();
-    const timelineData = await timelineRes.json();
+    const timelineData = (await timelineRes.json()) as { blocks: Block[] };
     const timerData = await timerRes.json();
 
     setTasks(tasksData.tasks.map((task: { title: string; estimatedPomodoros: number | null }) => ({
+      clientId: newClientId(),
       title: task.title,
       estimatedPomodoros: task.estimatedPomodoros ?? undefined,
     })));
     setRecurring(recurringData.recurring);
     setEvents(
       eventsData.events.map((event: { title: string; startTimeIso: string; endTimeIso: string }) => ({
+        clientId: newClientId(),
         title: event.title,
         startTime: event.startTimeIso.slice(11, 16),
         endTime: event.endTimeIso.slice(11, 16),
       })),
     );
-    setTimeline(timelineData.blocks);
+    const loadedTimeline = sortByStartTime(timelineData.blocks);
+    setTimeline(loadedTimeline);
     setTimer(timerData.session);
+    setMode(loadedTimeline.length > 0 ? "timeline" : "editing");
     setLoading(false);
   }, []);
 
@@ -92,16 +120,15 @@ function App() {
     void loadDay();
   }, [loadDay]);
 
-  async function saveTasksAndContinue(): Promise<void> {
+  async function saveDay(): Promise<void> {
     await fetch(`${API}/day/${today}/tasks`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tasks }),
+      body: JSON.stringify({
+        tasks: tasks.map(({ title, estimatedPomodoros }) => ({ title, estimatedPomodoros })),
+      }),
     });
-    setStep(2);
-  }
 
-  async function saveRecurringAndContinue(): Promise<void> {
     await fetch(`${API}/day/${today}/recurring`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -109,10 +136,7 @@ function App() {
         recurring: recurring.map((item) => ({ id: item.id, isCompleted: item.isCompleted })),
       }),
     });
-    setStep(3);
-  }
 
-  async function saveEventsAndGenerate(): Promise<void> {
     await fetch(`${API}/day/${today}/events`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -129,9 +153,9 @@ function App() {
     const planData = await planRes.json();
     setUnscheduledCount(planData.unscheduledTasks.length);
     const timelineRes = await fetch(`${API}/day/${today}/timeline`);
-    const timelineData = await timelineRes.json();
-    setTimeline(timelineData.blocks);
-    setStep(4);
+    const timelineData = (await timelineRes.json()) as { blocks: Block[] };
+    setTimeline(sortByStartTime(timelineData.blocks));
+    setMode("timeline");
   }
 
   async function persistTimer(next: TimerSession): Promise<void> {
@@ -143,7 +167,7 @@ function App() {
   }
 
   async function startTimer(): Promise<void> {
-    const firstBlock = timeline.find((block) => block.blockType !== "fixed_event");
+    const firstBlock = orderedTimeline.find((block) => block.blockType !== "fixed_event");
     if (!firstBlock || !timer) return;
     const next = { ...timer, activeBlockId: firstBlock.id, state: "running" as const, elapsedSeconds: 0 };
     setTimer(next);
@@ -160,8 +184,8 @@ function App() {
 
   async function skipBlock(): Promise<void> {
     if (!timer || !timer.activeBlockId) return;
-    const currentIndex = timeline.findIndex((block) => block.id === timer.activeBlockId);
-    const nextBlock = timeline.slice(currentIndex + 1).find((block) => block.blockType !== "fixed_event");
+    const currentIndex = orderedTimeline.findIndex((block) => block.id === timer.activeBlockId);
+    const nextBlock = orderedTimeline.slice(currentIndex + 1).find((block) => block.blockType !== "fixed_event");
     const next = {
       ...timer,
       activeBlockId: nextBlock?.id ?? null,
@@ -175,14 +199,42 @@ function App() {
   function addTask(): void {
     const title = taskDraft.trim();
     if (!title) return;
-    setTasks((current) => [...current, { title }]);
+    setTasks((current) => [...current, { clientId: newClientId(), title }]);
     setTaskDraft("");
+  }
+
+  function updateTask(clientId: string, updates: Partial<TaskInput>): void {
+    setTasks((current) => current.map((task) => (task.clientId === clientId ? { ...task, ...updates } : task)));
+  }
+
+  function deleteTask(clientId: string): void {
+    setTasks((current) => current.filter((task) => task.clientId !== clientId));
+    if (editingTaskId === clientId) {
+      setEditingTaskId(null);
+    }
   }
 
   function addEvent(): void {
     if (!eventDraft.title.trim()) return;
     setEvents((current) => [...current, eventDraft]);
-    setEventDraft({ title: "", startTime: "09:00", endTime: "09:30" });
+    setEventDraft({ clientId: newClientId(), title: "", startTime: "09:00", endTime: "09:30" });
+  }
+
+  function updateEvent(clientId: string, updates: Partial<EventInput>): void {
+    setEvents((current) => current.map((event) => (event.clientId === clientId ? { ...event, ...updates } : event)));
+  }
+
+  function deleteEvent(clientId: string): void {
+    setEvents((current) => current.filter((event) => event.clientId !== clientId));
+  }
+
+  function togglePlanningTimer(): void {
+    setPlanningTimerRunning((current) => !current);
+  }
+
+  function resetPlanningTimer(): void {
+    setPlanningTimerRunning(false);
+    setPlanningSecondsLeft(PLANNING_TIMER_SECONDS);
   }
 
   if (loading) {
@@ -196,84 +248,158 @@ function App() {
         <p>{today}</p>
       </header>
 
-      <section className="wizard">
-        <h2>Daily Planning Flow (Strict)</h2>
-        <p>Step {step} of 4</p>
-
-        {step === 1 && (
-          <div className="panel">
-            <h3>1) Prioritize tasks (10 minutes)</h3>
-            <p>Time left: {Math.floor(planningSecondsLeft / 60)}:{String(planningSecondsLeft % 60).padStart(2, "0")}</p>
-            <div className="row">
-              <input value={taskDraft} onChange={(event) => setTaskDraft(event.target.value)} placeholder="Important task" />
-              <button onClick={addTask}>Add</button>
+      {mode === "editing" && (
+        <section className="editing-layout">
+          <div>
+            <div className="section-heading">
+              <div>
+                <h2>Plan the Day</h2>
+                <p>Add work, eliminate recurring items, and block calendar events before saving the timeline.</p>
+              </div>
+              <button disabled={tasks.length === 0} onClick={() => void saveDay()}>
+                Save Day
+              </button>
             </div>
-            <ol>{tasks.map((task, index) => <li key={`${task.title}-${index}`}>{task.title}</li>)}</ol>
-            <button disabled={tasks.length === 0} onClick={() => void saveTasksAndContinue()}>Save and continue</button>
-          </div>
-        )}
 
-        {step === 2 && (
-          <div className="panel">
-            <h3>2) Recurring checklist</h3>
-            <ul>
-              {recurring.map((item) => (
-                <li key={item.id}>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={item.isCompleted}
-                      onChange={() =>
-                        setRecurring((current) =>
-                          current.map((entry) =>
-                            entry.id === item.id ? { ...entry, isCompleted: !entry.isCompleted } : entry,
-                          ),
-                        )
-                      }
-                    />
-                    <span className={item.isCompleted ? "done" : ""}>{item.titleSnapshot}</span>
-                  </label>
-                </li>
-              ))}
-            </ul>
-            <button onClick={() => void saveRecurringAndContinue()}>Save and continue</button>
-          </div>
-        )}
+            <div className="edit-panels">
+              <div className="panel">
+                <h3>Add Tasks</h3>
+                <div className="row">
+                  <input value={taskDraft} onChange={(event) => setTaskDraft(event.target.value)} placeholder="Important task" />
+                  <button onClick={addTask}>Add</button>
+                </div>
+                <ol className="editable-list">
+                  {tasks.map((task) => (
+                    <li key={task.clientId}>
+                      {editingTaskId === task.clientId ? (
+                        <div className="edit-row">
+                          <input
+                            value={task.title}
+                            onChange={(event) => updateTask(task.clientId, { title: event.target.value })}
+                            aria-label="Task title"
+                          />
+                          <input
+                            type="number"
+                            min="1"
+                            value={task.estimatedPomodoros ?? 1}
+                            onChange={(event) =>
+                              updateTask(task.clientId, { estimatedPomodoros: Number(event.target.value) || 1 })
+                            }
+                            aria-label="Estimated Pomodoros"
+                          />
+                          <button onClick={() => setEditingTaskId(null)}>Save</button>
+                        </div>
+                      ) : (
+                        <div className="item-row">
+                          <span>{task.title}</span>
+                          <span className="muted">{task.estimatedPomodoros ?? 1} pomodoro</span>
+                          <button onClick={() => setEditingTaskId(task.clientId)}>Edit</button>
+                          <button onClick={() => deleteTask(task.clientId)}>Remove</button>
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              </div>
 
-        {step === 3 && (
-          <div className="panel">
-            <h3>3) Fixed events</h3>
-            <div className="row">
-              <input
-                value={eventDraft.title}
-                onChange={(event) => setEventDraft((current) => ({ ...current, title: event.target.value }))}
-                placeholder="Meeting title"
-              />
-              <input
-                type="time"
-                value={eventDraft.startTime}
-                onChange={(event) => setEventDraft((current) => ({ ...current, startTime: event.target.value }))}
-              />
-              <input
-                type="time"
-                value={eventDraft.endTime}
-                onChange={(event) => setEventDraft((current) => ({ ...current, endTime: event.target.value }))}
-              />
-              <button onClick={addEvent}>Add</button>
+              <div className="panel">
+                <h3>Eliminate Recurring Tasks</h3>
+                <ul className="editable-list">
+                  {recurring.map((item) => (
+                    <li key={item.id}>
+                      <div className="item-row">
+                        <span className={item.isCompleted ? "done" : ""}>{item.titleSnapshot}</span>
+                        <button
+                          onClick={() =>
+                            setRecurring((current) =>
+                              current.map((entry) =>
+                                entry.id === item.id ? { ...entry, isCompleted: !entry.isCompleted } : entry,
+                              ),
+                            )
+                          }
+                        >
+                          {item.isCompleted ? "Restore" : "Eliminate"}
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="panel">
+                <h3>Add Calendar Events</h3>
+                <div className="row">
+                  <input
+                    value={eventDraft.title}
+                    onChange={(event) => setEventDraft((current) => ({ ...current, title: event.target.value }))}
+                    placeholder="Meeting title"
+                  />
+                  <input
+                    type="time"
+                    value={eventDraft.startTime}
+                    onChange={(event) => setEventDraft((current) => ({ ...current, startTime: event.target.value }))}
+                  />
+                  <input
+                    type="time"
+                    value={eventDraft.endTime}
+                    onChange={(event) => setEventDraft((current) => ({ ...current, endTime: event.target.value }))}
+                  />
+                  <button onClick={addEvent}>Add</button>
+                </div>
+                <ul className="editable-list">
+                  {events.map((eventItem) => (
+                    <li key={eventItem.clientId}>
+                      <div className="edit-row">
+                        <input
+                          value={eventItem.title}
+                          onChange={(event) => updateEvent(eventItem.clientId, { title: event.target.value })}
+                          aria-label="Event title"
+                        />
+                        <input
+                          type="time"
+                          value={eventItem.startTime}
+                          onChange={(event) => updateEvent(eventItem.clientId, { startTime: event.target.value })}
+                          aria-label="Event start"
+                        />
+                        <input
+                          type="time"
+                          value={eventItem.endTime}
+                          onChange={(event) => updateEvent(eventItem.clientId, { endTime: event.target.value })}
+                          aria-label="Event end"
+                        />
+                        <button onClick={() => deleteEvent(eventItem.clientId)}>Remove</button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
-            <ul>{events.map((event, index) => <li key={`${event.title}-${index}`}>{event.startTime}-{event.endTime} {event.title}</li>)}</ul>
-            <button onClick={() => void saveEventsAndGenerate()}>Generate schedule</button>
           </div>
-        )}
-      </section>
 
-      {step === 4 && (
+          <div className="panel timer-card">
+            <h3>Planning Timer</h3>
+            <p className="timer-display">
+              {Math.floor(planningSecondsLeft / 60)}:{String(planningSecondsLeft % 60).padStart(2, "0")}
+            </p>
+            <div className="row">
+              <button onClick={togglePlanningTimer}>{planningTimerRunning ? "Pause" : "Start"}</button>
+              <button onClick={resetPlanningTimer}>Reset</button>
+            </div>
+            <p className="muted">Use this 10-minute timer to choose the most important work before saving the day.</p>
+          </div>
+        </section>
+      )}
+
+      {mode === "timeline" && (
         <section className="execution">
           <div className="timeline panel">
-            <h3>Timeline</h3>
+            <div className="section-heading">
+              <h2>Timeline</h2>
+              <button onClick={() => setMode("editing")}>Edit Timeline for Day</button>
+            </div>
             {unscheduledCount > 0 && <p className="warning">{unscheduledCount} tasks could not be fully scheduled.</p>}
             <ul>
-              {timeline.map((block) => (
+              {orderedTimeline.map((block) => (
                 <li key={block.id} className={timer?.activeBlockId === block.id ? "active" : ""}>
                   <strong>{formatTime(block.startTimeIso)} - {formatTime(block.endTimeIso)}</strong> {block.label} ({block.blockType})
                 </li>

@@ -1,10 +1,10 @@
-# Test Plan: Strategy and Tactics
+# Test Plan and Guidelines
 
 ## Quality goals
 
 - Planning output is deterministic and constraint-safe.
 - Timer behavior is reliable across refresh and restart.
-- Strict daily flow enforces required sequencing.
+- Daily editing flow reliably saves inputs before timeline generation.
 - Core user journey remains stable as features expand.
 
 ## Document boundary
@@ -54,14 +54,20 @@
 
 ## 3) Frontend component tests
 
-- Strict wizard blocks progression when required inputs are missing.
+- Editing workspace shows task, recurring, and event panels together for day setup.
+- Planning timer starts paused and supports start, pause, and reset.
+- Each task row exposes in-place editing for title and estimated Pomodoros.
+- Edit Timeline for Day returns from timeline mode to the editing workspace.
 - Timeline list renders ordered blocks with readable labels/times.
 - Active timer panel reflects running and paused states.
 - Overflow warnings appear when unscheduled tasks exist.
 
 ## 4) End-to-end smoke tests
 
-- New day setup to generated plan and timer start.
+- New day opens editing mode with paused planning timer, saves the day, then shows the generated timeline.
+- Timeline edit flow reopens edit panels and recalculates the day after Save Day.
+- Repeated refresh/save/regenerate does not duplicate fixed events or stale planned blocks.
+- Timeline ordering places earlier events and blocks before later ones.
 - Refresh during active timer keeps expected active block.
 - User can complete recurring checklist and see persisted state.
 
