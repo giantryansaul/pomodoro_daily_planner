@@ -51,6 +51,23 @@ export interface TimerSession {
   elapsedSeconds: number;
 }
 
+export interface TaskInput {
+  title: string;
+  notes?: string;
+  estimatedPomodoros?: number;
+}
+
+export interface EventInput {
+  title: string;
+  startTimeIso: string;
+  endTimeIso: string;
+}
+
+export interface RecurringCompletionUpdate {
+  id: string;
+  isCompleted: boolean;
+}
+
 export interface UnscheduledTask {
   taskId: string;
   title: string;
