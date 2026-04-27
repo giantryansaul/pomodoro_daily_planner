@@ -2,6 +2,7 @@ import type { FixedEvent, PlannerResult, ScheduleBlock, Task, UnscheduledTask } 
 
 const FOCUS_MINUTES = 25;
 const BREAK_MINUTES = 5;
+const FOCUS_SESSION_MINUTES = FOCUS_MINUTES + BREAK_MINUTES;
 
 interface Session {
   taskId: string;
@@ -90,7 +91,7 @@ function scheduleFocusAndBreak(
   blocks: ScheduleBlock[],
   unscheduledTasks: UnscheduledTask[],
 ): void {
-  const availableWindow = freeWindows.find((candidateWindow) => windowFits(candidateWindow, FOCUS_MINUTES));
+  const availableWindow = freeWindows.find((candidateWindow) => windowFits(candidateWindow, FOCUS_SESSION_MINUTES));
   if (!availableWindow) {
     unscheduledTasks.push({
       taskId: session.taskId,
@@ -114,25 +115,21 @@ function scheduleFocusAndBreak(
     sequenceIndex: blocks.length + 1,
     status: "planned",
   });
-  availableWindow.start = focusEnd;
-
-  if (windowFits(availableWindow, BREAK_MINUTES)) {
-    const breakStart = new Date(availableWindow.start);
-    const breakEnd = addMinutes(breakStart, BREAK_MINUTES);
-    blocks.push({
-      id: crypto.randomUUID(),
-      dayPlanId,
-      sourceTaskId: null,
-      sourceEventId: null,
-      blockType: "break",
-      label: "Break",
-      startTimeIso: breakStart.toISOString(),
-      endTimeIso: breakEnd.toISOString(),
-      sequenceIndex: blocks.length + 1,
-      status: "planned",
-    });
-    availableWindow.start = breakEnd;
-  }
+  const breakStart = new Date(focusEnd);
+  const breakEnd = addMinutes(breakStart, BREAK_MINUTES);
+  blocks.push({
+    id: crypto.randomUUID(),
+    dayPlanId,
+    sourceTaskId: null,
+    sourceEventId: null,
+    blockType: "break",
+    label: "Break",
+    startTimeIso: breakStart.toISOString(),
+    endTimeIso: breakEnd.toISOString(),
+    sequenceIndex: blocks.length + 1,
+    status: "planned",
+  });
+  availableWindow.start = breakEnd;
 }
 
 function sortAndReindexBlocks(blocks: ScheduleBlock[]): ScheduleBlock[] {

@@ -252,6 +252,56 @@ export const scheduleBlockDao = {
       sourceEventId,
     );
   },
+
+  updateFocusSession(
+    dayPlanId: string,
+    blockId: string,
+    input: { label: string; startTimeIso: string; focusEndTimeIso: string; breakEndTimeIso: string },
+  ): { sourceTaskId: string | null } | null {
+    const focusBlock = db
+      .prepare(
+        `SELECT id, source_task_id as sourceTaskId, end_time_iso as endTimeIso
+         FROM schedule_blocks WHERE id = ? AND day_plan_id = ? AND block_type = 'focus'`,
+      )
+      .get(blockId, dayPlanId) as { id: string; sourceTaskId: string | null; endTimeIso: string } | undefined;
+    if (!focusBlock) return null;
+
+    const breakBlock = db
+      .prepare(
+        `SELECT id FROM schedule_blocks
+         WHERE day_plan_id = ? AND block_type = 'break' AND start_time_iso = ?
+         ORDER BY sequence_index ASC LIMIT 1`,
+      )
+      .get(dayPlanId, focusBlock.endTimeIso) as { id: string } | undefined;
+    const now = nowIso();
+    const tx = db.transaction(() => {
+      db.prepare(
+        `UPDATE schedule_blocks
+         SET label = ?, start_time_iso = ?, end_time_iso = ?, updated_at = ?
+         WHERE id = ? AND day_plan_id = ?`,
+      ).run(input.label, input.startTimeIso, input.focusEndTimeIso, now, blockId, dayPlanId);
+      if (breakBlock) {
+        db.prepare(
+          `UPDATE schedule_blocks
+           SET start_time_iso = ?, end_time_iso = ?, updated_at = ?
+           WHERE id = ? AND day_plan_id = ?`,
+        ).run(input.focusEndTimeIso, input.breakEndTimeIso, now, breakBlock.id, dayPlanId);
+      }
+    });
+    tx();
+    return { sourceTaskId: focusBlock.sourceTaskId };
+  },
+
+  updateTimelineEvent(dayPlanId: string, blockId: string, input: { label: string; startTimeIso: string; endTimeIso: string }): boolean {
+    const result = db
+      .prepare(
+        `UPDATE schedule_blocks
+         SET label = ?, start_time_iso = ?, end_time_iso = ?, updated_at = ?
+         WHERE id = ? AND day_plan_id = ? AND block_type = 'fixed_event'`,
+      )
+      .run(input.label, input.startTimeIso, input.endTimeIso, nowIso(), blockId, dayPlanId);
+    return result.changes > 0;
+  },
 };
 
 export const timerSessionDao = {

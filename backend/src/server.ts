@@ -108,6 +108,52 @@ app.put("/api/day/:date/events/:eventId/title", (req, res) => {
   res.json({ ok: true });
 });
 
+app.put("/api/day/:date/timeline/:blockId/focus-session", (req, res) => {
+  const dayPlan = dayPlanDao.getOrCreate(req.params.date);
+  const label = typeof req.body.label === "string" ? req.body.label.trim() : "";
+  const startTimeIso = typeof req.body.startTimeIso === "string" ? req.body.startTimeIso : "";
+  const focusEndTimeIso = typeof req.body.focusEndTimeIso === "string" ? req.body.focusEndTimeIso : "";
+  const breakEndTimeIso = typeof req.body.breakEndTimeIso === "string" ? req.body.breakEndTimeIso : "";
+  if (!label || Number.isNaN(new Date(startTimeIso).getTime()) || Number.isNaN(new Date(focusEndTimeIso).getTime()) || Number.isNaN(new Date(breakEndTimeIso).getTime())) {
+    res.status(400).json({ error: "Valid label and session times are required" });
+    return;
+  }
+  const updated = scheduleBlockDao.updateFocusSession(dayPlan.id, req.params.blockId, {
+    label,
+    startTimeIso,
+    focusEndTimeIso,
+    breakEndTimeIso,
+  });
+  if (!updated) {
+    res.status(404).json({ error: "Focus block not found" });
+    return;
+  }
+  if (updated.sourceTaskId) {
+    taskDao.updateTitle(dayPlan.id, updated.sourceTaskId, label);
+    scheduleBlockDao.updateLabelsBySourceTask(dayPlan.id, updated.sourceTaskId, label);
+  }
+  res.json({ ok: true });
+});
+
+app.put("/api/day/:date/timeline/:blockId/event", (req, res) => {
+  const dayPlan = dayPlanDao.getOrCreate(req.params.date);
+  const label = typeof req.body.label === "string" ? req.body.label.trim() : "";
+  const startTimeIso = typeof req.body.startTimeIso === "string" ? req.body.startTimeIso : "";
+  const endTimeIso = typeof req.body.endTimeIso === "string" ? req.body.endTimeIso : "";
+  const start = new Date(startTimeIso).getTime();
+  const end = new Date(endTimeIso).getTime();
+  if (!label || Number.isNaN(start) || Number.isNaN(end) || start >= end) {
+    res.status(400).json({ error: "Valid label and event times are required" });
+    return;
+  }
+  const updated = scheduleBlockDao.updateTimelineEvent(dayPlan.id, req.params.blockId, { label, startTimeIso, endTimeIso });
+  if (!updated) {
+    res.status(404).json({ error: "Timeline event not found" });
+    return;
+  }
+  res.json({ ok: true });
+});
+
 app.get("/api/day/:date/timer-session", (req, res) => {
   const dayPlan = dayPlanDao.getOrCreate(req.params.date);
   const session = timerSessionDao.getOrCreate(dayPlan.id);

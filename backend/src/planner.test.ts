@@ -74,4 +74,31 @@ describe("generatePlan", () => {
     expect(firstResult.blocks.filter((block) => block.label === "Calendar hold")).toHaveLength(1);
     expect(secondResult.blocks.filter((block) => block.label === "Calendar hold")).toHaveLength(1);
   });
+
+  it("does not schedule focus and break sessions into fixed events", () => {
+    const tasks = [makeTask("a", "Needs full block", 1)];
+    const fixedEvents: FixedEvent[] = [
+      {
+        id: "evt-1",
+        dayPlanId: "day-1",
+        title: "Early meeting",
+        startTimeIso: "2026-04-25T07:25:00",
+        endTimeIso: "2026-04-25T08:00:00",
+      },
+    ];
+
+    const result = generatePlan("2026-04-25", tasks, fixedEvents, "day-1");
+    const focus = result.blocks.find((block) => block.blockType === "focus");
+    const breakBlock = result.blocks.find((block) => block.blockType === "break");
+    const fixedEventEnd = new Date(fixedEvents[0].endTimeIso).getTime();
+    const focusStart = new Date(focus?.startTimeIso ?? "").getTime();
+    const focusEnd = new Date(focus?.endTimeIso ?? "").getTime();
+    const breakStart = new Date(breakBlock?.startTimeIso ?? "").getTime();
+    const breakEnd = new Date(breakBlock?.endTimeIso ?? "").getTime();
+
+    expect(focusStart).toBe(fixedEventEnd);
+    expect(focusEnd - focusStart).toBe(25 * 60_000);
+    expect(breakStart).toBe(focusEnd);
+    expect(breakEnd - breakStart).toBe(5 * 60_000);
+  });
 });
