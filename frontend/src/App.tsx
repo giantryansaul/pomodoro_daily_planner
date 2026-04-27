@@ -7,9 +7,12 @@ type EventInput = { clientId: string; title: string; startTime: string; endTime:
 type Block = {
   id: string;
   blockType: "focus" | "break" | "fixed_event";
+  sourceTaskId: string | null;
+  sourceEventId: string | null;
   label: string;
   startTimeIso: string;
   endTimeIso: string;
+  status: "planned" | "completed" | "skipped";
 };
 type TimerSession = {
   id: string;
@@ -56,12 +59,14 @@ function App() {
   });
   const [timeline, setTimeline] = useState<Block[]>([]);
   const [timer, setTimer] = useState<TimerSession | null>(null);
+  const [editingTimelineBlockId, setEditingTimelineBlockId] = useState<string | null>(null);
+  const [timelineLabelDraft, setTimelineLabelDraft] = useState("");
   const [unscheduledCount, setUnscheduledCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
   const orderedTimeline = useMemo(() => sortByStartTime(timeline), [timeline]);
   const firstRunnableBlock = useMemo(
-    () => orderedTimeline.find((block) => block.blockType !== "fixed_event"),
+    () => orderedTimeline.find((block) => block.blockType !== "fixed_event" && block.status !== "completed"),
     [orderedTimeline],
   );
   const activeBlock = useMemo(
@@ -175,9 +180,16 @@ function App() {
   }
 
   async function startTimer(): Promise<void> {
-    const firstBlock = orderedTimeline.find((block) => block.blockType !== "fixed_event");
+    const firstBlock = orderedTimeline.find((block) => block.blockType !== "fixed_event" && block.status !== "completed");
     if (!firstBlock || !timer) return;
     const next = { ...timer, activeBlockId: firstBlock.id, state: "running" as const, elapsedSeconds: 0 };
+    setTimer(next);
+    await persistTimer(next);
+  }
+
+  async function playBlock(blockId: string): Promise<void> {
+    if (!timer) return;
+    const next = { ...timer, activeBlockId: blockId, state: "running" as const, elapsedSeconds: 0 };
     setTimer(next);
     await persistTimer(next);
   }
@@ -193,7 +205,9 @@ function App() {
   async function skipBlock(): Promise<void> {
     if (!timer || !timer.activeBlockId) return;
     const currentIndex = orderedTimeline.findIndex((block) => block.id === timer.activeBlockId);
-    const nextBlock = orderedTimeline.slice(currentIndex + 1).find((block) => block.blockType !== "fixed_event");
+    const nextBlock = orderedTimeline
+      .slice(currentIndex + 1)
+      .find((block) => block.blockType !== "fixed_event" && block.status !== "completed");
     const next = {
       ...timer,
       activeBlockId: nextBlock?.id ?? null,
@@ -202,6 +216,55 @@ function App() {
     };
     setTimer(next);
     await persistTimer(next);
+  }
+
+  async function completeBlock(blockId: string): Promise<void> {
+    const targetBlock = orderedTimeline.find((block) => block.id === blockId);
+    if (!targetBlock || targetBlock.status === "completed") return;
+    await fetch(`${API}/day/${today}/timeline/${blockId}/complete`, { method: "POST" });
+    setTimeline((current) => current.map((block) => (block.id === blockId ? { ...block, status: "completed" } : block)));
+    if (!timer || timer.activeBlockId !== blockId) return;
+    const currentIndex = orderedTimeline.findIndex((block) => block.id === blockId);
+    const nextBlock = orderedTimeline
+      .slice(currentIndex + 1)
+      .find((block) => block.blockType !== "fixed_event" && block.status !== "completed");
+    const next: TimerSession = {
+      ...timer,
+      activeBlockId: nextBlock?.id ?? null,
+      elapsedSeconds: 0,
+      state: nextBlock ? "running" : "completed",
+    };
+    setTimer(next);
+    await persistTimer(next);
+  }
+
+  function beginTimelineEdit(block: Block): void {
+    setEditingTimelineBlockId(block.id);
+    setTimelineLabelDraft(block.label);
+  }
+
+  async function saveTimelineEdit(block: Block): Promise<void> {
+    const nextLabel = timelineLabelDraft.trim();
+    if (!nextLabel) return;
+    if (block.blockType === "focus" && block.sourceTaskId) {
+      await fetch(`${API}/day/${today}/tasks/${block.sourceTaskId}/title`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: nextLabel }),
+      });
+      setTimeline((current) =>
+        current.map((entry) => (entry.sourceTaskId === block.sourceTaskId ? { ...entry, label: nextLabel } : entry)),
+      );
+    } else if (block.blockType === "fixed_event" && block.sourceEventId) {
+      await fetch(`${API}/day/${today}/events/${block.sourceEventId}/title`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: nextLabel }),
+      });
+      setTimeline((current) => current.map((entry) => (entry.id === block.id ? { ...entry, label: nextLabel } : entry)));
+    }
+    setEditingTimelineBlockId(null);
+    setTimelineLabelDraft("");
   }
 
   function addTask(): void {
@@ -408,8 +471,54 @@ function App() {
             {unscheduledCount > 0 && <p className="warning">{unscheduledCount} tasks could not be fully scheduled.</p>}
             <ul>
               {orderedTimeline.map((block) => (
-                <li key={block.id} className={timer?.activeBlockId === block.id ? "active" : ""}>
-                  <strong>{formatTime(block.startTimeIso)} - {formatTime(block.endTimeIso)}</strong> {block.label} ({block.blockType})
+                <li
+                  key={block.id}
+                  className={`${timer?.activeBlockId === block.id ? "active " : ""}${block.status === "completed" ? "completed" : ""}`.trim()}
+                >
+                  <div className="item-row">
+                    <strong>{formatTime(block.startTimeIso)} - {formatTime(block.endTimeIso)}</strong>
+                    {editingTimelineBlockId === block.id ? (
+                      <>
+                        <input
+                          value={timelineLabelDraft}
+                          onChange={(event) => setTimelineLabelDraft(event.target.value)}
+                          aria-label="Timeline label"
+                        />
+                        <button onClick={() => void saveTimelineEdit(block)}>Save</button>
+                      </>
+                    ) : (
+                      <span>{block.label} ({block.blockType})</span>
+                    )}
+                    <button
+                      onClick={() => void playBlock(block.id)}
+                      disabled={block.blockType === "fixed_event" || block.status === "completed"}
+                    >
+                      Play
+                    </button>
+                    <button
+                      onClick={() => void completeBlock(block.id)}
+                      disabled={block.blockType === "fixed_event" || block.status === "completed"}
+                    >
+                      Completed
+                    </button>
+                    {editingTimelineBlockId === block.id ? (
+                      <button
+                        onClick={() => {
+                          setEditingTimelineBlockId(null);
+                          setTimelineLabelDraft("");
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => beginTimelineEdit(block)}
+                        disabled={block.blockType === "break"}
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>

@@ -1,6 +1,7 @@
 export type BlockType = "focus" | "break" | "fixed_event";
 export type BlockStatus = "planned" | "completed" | "skipped";
 export type TimerState = "idle" | "running" | "paused" | "completed";
+export type TaskStatus = "pending" | "completed";
 
 export interface Task {
   id: string;
@@ -9,7 +10,7 @@ export interface Task {
   notes: string | null;
   priorityRank: number;
   estimatedPomodoros: number | null;
-  status: string;
+  status: TaskStatus;
 }
 
 export interface FixedEvent {
@@ -33,6 +34,7 @@ export interface ScheduleBlock {
   id: string;
   dayPlanId: string;
   sourceTaskId: string | null;
+  sourceEventId: string | null;
   blockType: BlockType;
   label: string;
   startTimeIso: string;

@@ -93,6 +93,14 @@ export const taskDao = {
     });
     tx();
   },
+
+  updateStatus(dayPlanId: string, taskId: string, status: Task["status"]): void {
+    db.prepare("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND day_plan_id = ?").run(status, nowIso(), taskId, dayPlanId);
+  },
+
+  updateTitle(dayPlanId: string, taskId: string, title: string): void {
+    db.prepare("UPDATE tasks SET title = ?, updated_at = ? WHERE id = ? AND day_plan_id = ?").run(title, nowIso(), taskId, dayPlanId);
+  },
 };
 
 export const recurringDao = {
@@ -151,13 +159,17 @@ export const eventDao = {
     });
     tx();
   },
+
+  updateTitle(dayPlanId: string, eventId: string, title: string): void {
+    db.prepare("UPDATE fixed_events SET title = ?, updated_at = ? WHERE id = ? AND day_plan_id = ?").run(title, nowIso(), eventId, dayPlanId);
+  },
 };
 
 export const scheduleBlockDao = {
   listForDay(dayPlanId: string): ScheduleBlock[] {
     const blocks = db
       .prepare(
-        `SELECT id, day_plan_id as dayPlanId, source_task_id as sourceTaskId, block_type as blockType,
+        `SELECT id, day_plan_id as dayPlanId, source_task_id as sourceTaskId, source_event_id as sourceEventId, block_type as blockType,
          label, start_time_iso as startTimeIso, end_time_iso as endTimeIso, sequence_index as sequenceIndex,
          status
          FROM schedule_blocks WHERE day_plan_id = ? ORDER BY start_time_iso ASC`,
@@ -170,8 +182,8 @@ export const scheduleBlockDao = {
     const now = nowIso();
     const stmt = db.prepare(
       `INSERT INTO schedule_blocks
-      (id, day_plan_id, source_task_id, block_type, label, start_time_iso, end_time_iso, sequence_index, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (id, day_plan_id, source_task_id, source_event_id, block_type, label, start_time_iso, end_time_iso, sequence_index, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const tx = db.transaction(() => {
       db.prepare(
@@ -186,6 +198,7 @@ export const scheduleBlockDao = {
           block.id,
           block.dayPlanId,
           block.sourceTaskId,
+          block.sourceEventId,
           block.blockType,
           block.label,
           block.startTimeIso,
@@ -198,6 +211,46 @@ export const scheduleBlockDao = {
       });
     });
     tx();
+  },
+
+  markCompleted(dayPlanId: string, blockId: string): { sourceTaskId: string | null } | null {
+    const block = db
+      .prepare("SELECT source_task_id as sourceTaskId FROM schedule_blocks WHERE id = ? AND day_plan_id = ?")
+      .get(blockId, dayPlanId) as { sourceTaskId: string | null } | undefined;
+    if (!block) return null;
+    db.prepare("UPDATE schedule_blocks SET status = 'completed', updated_at = ? WHERE id = ? AND day_plan_id = ?").run(
+      nowIso(),
+      blockId,
+      dayPlanId,
+    );
+    return block;
+  },
+
+  updateLabel(dayPlanId: string, blockId: string, label: string): void {
+    db.prepare("UPDATE schedule_blocks SET label = ?, updated_at = ? WHERE id = ? AND day_plan_id = ?").run(
+      label,
+      nowIso(),
+      blockId,
+      dayPlanId,
+    );
+  },
+
+  updateLabelsBySourceTask(dayPlanId: string, sourceTaskId: string, label: string): void {
+    db.prepare("UPDATE schedule_blocks SET label = ?, updated_at = ? WHERE day_plan_id = ? AND source_task_id = ?").run(
+      label,
+      nowIso(),
+      dayPlanId,
+      sourceTaskId,
+    );
+  },
+
+  updateLabelsBySourceEvent(dayPlanId: string, sourceEventId: string, label: string): void {
+    db.prepare("UPDATE schedule_blocks SET label = ?, updated_at = ? WHERE day_plan_id = ? AND source_event_id = ?").run(
+      label,
+      nowIso(),
+      dayPlanId,
+      sourceEventId,
+    );
   },
 };
 

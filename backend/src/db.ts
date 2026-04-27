@@ -85,7 +85,16 @@ export function initDb(): void {
   for (const statement of schemaStatements) {
     db.exec(statement);
   }
+  ensureSourceEventColumn();
   seedRecurringTemplates();
+}
+
+function ensureSourceEventColumn(): void {
+  const columns = db.prepare("PRAGMA table_info(schedule_blocks)").all() as Array<{ name: string }>;
+  const hasSourceEventId = columns.some((column) => column.name === "source_event_id");
+  if (!hasSourceEventId) {
+    db.exec("ALTER TABLE schedule_blocks ADD COLUMN source_event_id TEXT REFERENCES fixed_events(id)");
+  }
 }
 
 function seedRecurringTemplates(): void {

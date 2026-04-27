@@ -154,6 +154,21 @@ ol {
   background: #eef2ff;
 }
 
+.timeline li {
+  padding: 0.4rem 0.5rem;
+  border-radius: 8px;
+}
+
+.timeline li.completed {
+  background: #ecfdf3;
+}
+
+.timeline li.completed span,
+.timeline li.completed strong {
+  color: #6b7280;
+  text-decoration: line-through;
+}
+
 @media (max-width: 900px) {
   .editing-layout,
   .execution,

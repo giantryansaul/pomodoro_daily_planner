@@ -71,6 +71,43 @@ app.get("/api/day/:date/timeline", (req, res) => {
   res.json({ dayPlanId: dayPlan.id, blocks });
 });
 
+app.post("/api/day/:date/timeline/:blockId/complete", (req, res) => {
+  const dayPlan = dayPlanDao.getOrCreate(req.params.date);
+  const block = scheduleBlockDao.markCompleted(dayPlan.id, req.params.blockId);
+  if (!block) {
+    res.status(404).json({ error: "Timeline block not found" });
+    return;
+  }
+  if (block.sourceTaskId) {
+    taskDao.updateStatus(dayPlan.id, block.sourceTaskId, "completed");
+  }
+  res.json({ ok: true });
+});
+
+app.put("/api/day/:date/tasks/:taskId/title", (req, res) => {
+  const dayPlan = dayPlanDao.getOrCreate(req.params.date);
+  const title = typeof req.body.title === "string" ? req.body.title.trim() : "";
+  if (!title) {
+    res.status(400).json({ error: "Title is required" });
+    return;
+  }
+  taskDao.updateTitle(dayPlan.id, req.params.taskId, title);
+  scheduleBlockDao.updateLabelsBySourceTask(dayPlan.id, req.params.taskId, title);
+  res.json({ ok: true });
+});
+
+app.put("/api/day/:date/events/:eventId/title", (req, res) => {
+  const dayPlan = dayPlanDao.getOrCreate(req.params.date);
+  const title = typeof req.body.title === "string" ? req.body.title.trim() : "";
+  if (!title) {
+    res.status(400).json({ error: "Title is required" });
+    return;
+  }
+  eventDao.updateTitle(dayPlan.id, req.params.eventId, title);
+  scheduleBlockDao.updateLabelsBySourceEvent(dayPlan.id, req.params.eventId, title);
+  res.json({ ok: true });
+});
+
 app.get("/api/day/:date/timer-session", (req, res) => {
   const dayPlan = dayPlanDao.getOrCreate(req.params.date);
   const session = timerSessionDao.getOrCreate(dayPlan.id);
