@@ -1,9 +1,9 @@
 import cors from "cors";
 import express from "express";
 import { getDbPath, initDb } from "./db.js";
-import { dayPlanDao, eventDao, recurringDao, scheduleBlockDao, taskDao, timerSessionDao } from "./dao.js";
+import { dayPlanDao, eventDao, recurringDao, recurringTemplateDao, scheduleBlockDao, settingsDao, taskDao, timerSessionDao } from "./dao.js";
 import { generatePlan } from "./planner.js";
-import type { EventInput, RecurringUpdate, TaskInput } from "./types.js";
+import type { DayBoundaryDefaults, EventInput, RecurringTemplateInput, RecurringUpdate, TaskInput } from "./types.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 3001);
@@ -47,8 +47,32 @@ function parsePlannerWindow(body: unknown): { dayStartTimeHhmm?: string; dayEndT
   return { dayStartTimeHhmm, dayEndTimeHhmm };
 }
 
+function parseDayBoundaryDefaults(body: unknown): DayBoundaryDefaults | null {
+  if (!body || typeof body !== "object") return null;
+  const payload = body as { dayStartTimeHhmm?: unknown; dayEndTimeHhmm?: unknown };
+  if (typeof payload.dayStartTimeHhmm !== "string" || typeof payload.dayEndTimeHhmm !== "string") return null;
+  const hhmmPattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+  if (!hhmmPattern.test(payload.dayStartTimeHhmm) || !hhmmPattern.test(payload.dayEndTimeHhmm)) return null;
+  if (payload.dayStartTimeHhmm >= payload.dayEndTimeHhmm) return null;
+  return { dayStartTimeHhmm: payload.dayStartTimeHhmm, dayEndTimeHhmm: payload.dayEndTimeHhmm };
+}
+
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, dbPath: getDbPath() });
+});
+
+app.get("/api/defaults/day-boundaries", (_req, res) => {
+  res.json(settingsDao.getDayBoundaryDefaults());
+});
+
+app.put("/api/defaults/day-boundaries", (req, res) => {
+  const defaults = parseDayBoundaryDefaults(req.body);
+  if (!defaults) {
+    res.status(400).json({ error: "Valid day boundary defaults are required" });
+    return;
+  }
+  settingsDao.updateDayBoundaryDefaults(defaults);
+  res.json({ ok: true });
 });
 
 app.get("/api/day/:date/tasks", (req, res) => {
@@ -85,6 +109,43 @@ app.put("/api/day/:date/recurring", (req, res) => {
   res.json({ ok: true });
 });
 
+function parseRecurringTemplateInput(payload: RecurringTemplateInput | undefined): RecurringTemplateInput | null {
+  const title = typeof payload?.title === "string" ? payload.title.trim() : "";
+  const startTimeHhmm = typeof payload?.startTimeHhmm === "string" ? payload.startTimeHhmm : null;
+  const endTimeHhmm = typeof payload?.endTimeHhmm === "string" ? payload.endTimeHhmm : null;
+  const hhmmPattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+  if (!title) return null;
+  if (!startTimeHhmm || !endTimeHhmm || !hhmmPattern.test(startTimeHhmm) || !hhmmPattern.test(endTimeHhmm) || startTimeHhmm >= endTimeHhmm) {
+    return null;
+  }
+  return { title, startTimeHhmm, endTimeHhmm };
+}
+
+app.post("/api/recurring-templates", (req, res) => {
+  const payload = req.body as RecurringTemplateInput | undefined;
+  const input = parseRecurringTemplateInput(payload);
+  if (!input) {
+    res.status(400).json({ error: "Valid start and end times are required" });
+    return;
+  }
+  const template = recurringTemplateDao.create(input);
+  res.status(201).json({ ok: true, template });
+});
+
+app.post("/api/day/:date/recurring-templates", (req, res) => {
+  const dayPlan = dayPlanDao.getOrCreate(req.params.date);
+  const payload = req.body as RecurringTemplateInput | undefined;
+  const input = parseRecurringTemplateInput(payload);
+  if (!input) {
+    res.status(400).json({ error: "Valid title, start time, and end time are required" });
+    return;
+  }
+  const template = recurringTemplateDao.create(input);
+  dayPlanDao.materializeRecurring(dayPlan.id);
+  const recurring = recurringDao.listForDay(dayPlan.id);
+  res.status(201).json({ ok: true, template, recurring });
+});
+
 app.get("/api/day/:date/events", (req, res) => {
   const dayPlan = dayPlanDao.getOrCreate(req.params.date);
   const events = eventDao.listForDay(dayPlan.id);
@@ -111,6 +172,14 @@ app.post("/api/day/:date/reset-and-generate", (req, res) => {
   const plannerWindow = parsePlannerWindow(req.body);
   const plan = generateAndPersistDayPlan(req.params.date, dayPlan.id, plannerWindow);
   res.json({ ok: true, ...plan });
+});
+
+app.post("/api/day/:date/clear", (req, res) => {
+  const dayPlan = dayPlanDao.getOrCreate(req.params.date);
+  dayPlanDao.clearDayToDefaults(dayPlan.id);
+  const recurring = recurringDao.listForDay(dayPlan.id);
+  const session = timerSessionDao.getOrCreate(dayPlan.id);
+  res.json({ ok: true, dayPlanId: dayPlan.id, tasks: [], events: [], timeline: [], recurring, session });
 });
 
 app.get("/api/day/:date/timeline", (req, res) => {

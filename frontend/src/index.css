@@ -60,11 +60,11 @@ body {
 
 .editing-layout,
 .execution {
-  margin-top: 1rem;
+  margin-top: 0.75rem;
 }
 
 .day-boundary-controls {
-  margin-top: 1rem;
+  margin-top: 0.75rem;
   padding: 0.85rem 1rem;
 }
 
@@ -104,6 +104,10 @@ body {
   box-shadow: 0 12px 32px rgb(15 23 42 / 8%);
 }
 
+.panel h3 {
+  margin: 0 0 0.75rem;
+}
+
 .execution {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
@@ -129,15 +133,27 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  margin-bottom: 1rem;
+  margin-bottom: 0.75rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #ffffff, #e0f2fe);
 }
 
-.section-heading h2 {
+.planning-heading h2 {
   margin: 0;
 }
 
-.section-heading p {
+.planning-heading p {
   margin: 0.25rem 0 0;
+  color: #334155;
+}
+
+.section-actions {
+  display: inline-flex;
+  gap: 0.5rem;
+  margin-bottom: 0;
+  flex-wrap: wrap;
 }
 
 .row {
@@ -219,6 +235,10 @@ ol {
   background: #f8fafc;
   border: 1px dashed #bfdbfe;
   border-radius: 14px;
+}
+
+.recurring-add-card {
+  margin-bottom: 0.75rem;
 }
 
 .task-entry,

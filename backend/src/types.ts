@@ -33,6 +33,27 @@ export interface DailyRecurringItem {
 }
 
 export type RecurringEditScope = "today" | "template";
+export type ResetDayMode = "state" | "clear";
+
+export interface DayBoundaryDefaults {
+  dayStartTimeHhmm: string;
+  dayEndTimeHhmm: string;
+}
+
+export interface RecurringTemplate {
+  id: string;
+  title: string;
+  startTimeHhmm: string | null;
+  endTimeHhmm: string | null;
+  sortOrder: number;
+  isActive: boolean;
+}
+
+export interface RecurringTemplateInput {
+  title: string;
+  startTimeHhmm?: string | null;
+  endTimeHhmm?: string | null;
+}
 
 export interface RecurringUpdate {
   id: string;

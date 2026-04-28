@@ -1,10 +1,13 @@
 import { db, nowIso } from "./db.js";
 import type {
+  DayBoundaryDefaults,
   DailyRecurringItem,
   EventInput,
   FixedEvent,
   RecurringCompletionUpdate,
   RecurringEditScope,
+  RecurringTemplate,
+  RecurringTemplateInput,
   RecurringUpdate,
   ScheduleBlock,
   Task,
@@ -19,6 +22,9 @@ function byStartTime<T extends { startTimeIso: string }>(left: T, right: T): num
 function eventKey(event: EventInput): string {
   return `${event.title.trim()}|${event.startTimeIso}|${event.endTimeIso}`;
 }
+
+const DEFAULT_DAY_START_TIME = "07:00";
+const DEFAULT_DAY_END_TIME = "19:00";
 
 export const dayPlanDao = {
   getOrCreate(dateIso: string): { id: string; dateIso: string } {
@@ -49,7 +55,13 @@ export const dayPlanDao = {
     const stmt = db.prepare(
       `INSERT INTO daily_recurring_items
       (id, day_plan_id, recurring_template_id, title_snapshot, start_time_snapshot_hhmm, end_time_snapshot_hhmm, sort_order, is_completed, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(day_plan_id, recurring_template_id) DO UPDATE SET
+        title_snapshot = excluded.title_snapshot,
+        start_time_snapshot_hhmm = excluded.start_time_snapshot_hhmm,
+        end_time_snapshot_hhmm = excluded.end_time_snapshot_hhmm,
+        sort_order = excluded.sort_order,
+        updated_at = excluded.updated_at`,
     );
     const tx = db.transaction(() => {
       for (const template of templates) {
@@ -85,6 +97,51 @@ export const dayPlanDao = {
          SET active_block_id = NULL, state = 'idle', started_at = NULL, paused_at = NULL, elapsed_seconds = 0, updated_at = ?
          WHERE day_plan_id = ?`,
       ).run(now, dayPlanId);
+    });
+    tx();
+  },
+
+  clearDayToDefaults(dayPlanId: string): void {
+    const now = nowIso();
+    const tx = db.transaction(() => {
+      db.prepare("DELETE FROM schedule_blocks WHERE day_plan_id = ?").run(dayPlanId);
+      db.prepare("DELETE FROM tasks WHERE day_plan_id = ?").run(dayPlanId);
+      db.prepare("DELETE FROM fixed_events WHERE day_plan_id = ?").run(dayPlanId);
+      db.prepare("DELETE FROM daily_recurring_items WHERE day_plan_id = ?").run(dayPlanId);
+      db.prepare(
+        `UPDATE timer_sessions
+         SET active_block_id = NULL, state = 'idle', started_at = NULL, paused_at = NULL, elapsed_seconds = 0, updated_at = ?
+         WHERE day_plan_id = ?`,
+      ).run(now, dayPlanId);
+    });
+    tx();
+    dayPlanDao.materializeRecurring(dayPlanId);
+  },
+};
+
+export const settingsDao = {
+  getDayBoundaryDefaults(): DayBoundaryDefaults {
+    const rows = db.prepare("SELECT key, value FROM app_settings WHERE key IN ('default_day_start_hhmm', 'default_day_end_hhmm')").all() as Array<{
+      key: string;
+      value: string;
+    }>;
+    const values = new Map(rows.map((row) => [row.key, row.value]));
+    return {
+      dayStartTimeHhmm: values.get("default_day_start_hhmm") ?? DEFAULT_DAY_START_TIME,
+      dayEndTimeHhmm: values.get("default_day_end_hhmm") ?? DEFAULT_DAY_END_TIME,
+    };
+  },
+
+  updateDayBoundaryDefaults(input: DayBoundaryDefaults): void {
+    const now = nowIso();
+    const stmt = db.prepare(
+      `INSERT INTO app_settings (key, value, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    );
+    const tx = db.transaction(() => {
+      stmt.run("default_day_start_hhmm", input.dayStartTimeHhmm, now);
+      stmt.run("default_day_end_hhmm", input.dayEndTimeHhmm, now);
     });
     tx();
   },
@@ -212,6 +269,29 @@ export const recurringDao = {
       }
     });
     tx();
+  },
+};
+
+export const recurringTemplateDao = {
+  create(input: RecurringTemplateInput): RecurringTemplate {
+    const title = input.title.trim();
+    const now = nowIso();
+    const maxSort = db.prepare("SELECT COALESCE(MAX(sort_order), -1) AS maxSort FROM recurring_templates").get() as { maxSort: number };
+    const sortOrder = maxSort.maxSort + 1;
+    const id = crypto.randomUUID();
+    db.prepare(
+      `INSERT INTO recurring_templates
+       (id, title, start_time_hhmm, end_time_hhmm, is_active, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 1, ?, ?, ?)`,
+    ).run(id, title, input.startTimeHhmm ?? null, input.endTimeHhmm ?? null, sortOrder, now, now);
+    return {
+      id,
+      title,
+      startTimeHhmm: input.startTimeHhmm ?? null,
+      endTimeHhmm: input.endTimeHhmm ?? null,
+      sortOrder,
+      isActive: true,
+    };
   },
 };
 

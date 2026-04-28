@@ -78,6 +78,11 @@ const schemaStatements = [
     elapsed_seconds INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
 ];
 
 export function initDb(): void {
@@ -87,6 +92,8 @@ export function initDb(): void {
   }
   ensureSourceEventColumn();
   ensureRecurringTimeColumns();
+  ensureDailyRecurringTemplateUniqueness();
+  ensureDefaultDayBoundarySettings();
   seedRecurringTemplates();
 }
 
@@ -118,6 +125,27 @@ function ensureRecurringTimeColumns(): void {
   if (!hasDailyEnd) {
     db.exec("ALTER TABLE daily_recurring_items ADD COLUMN end_time_snapshot_hhmm TEXT");
   }
+}
+
+function ensureDailyRecurringTemplateUniqueness(): void {
+  const uniqueIndexes = db.prepare("PRAGMA index_list(daily_recurring_items)").all() as Array<{ name: string; unique: 0 | 1 }>;
+  const hasTemplateUniq = uniqueIndexes.some((index) => index.unique === 1 && index.name === "idx_daily_recurring_day_template_unique");
+  if (!hasTemplateUniq) {
+    db.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_recurring_day_template_unique ON daily_recurring_items(day_plan_id, recurring_template_id)",
+    );
+  }
+}
+
+function ensureDefaultDayBoundarySettings(): void {
+  const now = nowIso();
+  const stmt = db.prepare(
+    `INSERT INTO app_settings (key, value, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(key) DO NOTHING`,
+  );
+  stmt.run("default_day_start_hhmm", "07:00", now);
+  stmt.run("default_day_end_hhmm", "19:00", now);
 }
 
 function seedRecurringTemplates(): void {

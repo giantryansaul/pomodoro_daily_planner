@@ -14,6 +14,8 @@ type RecurringItemTimed = {
   editScope: "today" | "template";
 };
 type EventInput = { clientId: string; title: string; startTime: string; endTime: string };
+type DayBoundaryDefaults = { dayStartTimeHhmm: string; dayEndTimeHhmm: string };
+type RecurringDraft = { title: string; startTime: string; endTime: string };
 type Block = {
   id: string;
   blockType: "focus" | "break" | "fixed_event" | "recurring_event";
@@ -61,6 +63,8 @@ const today = new Date().toISOString().slice(0, 10);
 const PLANNING_TIMER_SECONDS = 10 * 60;
 const DEFAULT_DAY_START_TIME = "07:00";
 const DEFAULT_DAY_END_TIME = "19:00";
+const DEFAULT_RECURRING_START_TIME = "07:00";
+const DEFAULT_RECURRING_END_TIME = "07:30";
 const HOUR_HEIGHT_PX = 96;
 const TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
   const hours = Math.floor(index / 2);
@@ -311,6 +315,20 @@ function TimerCard({
   );
 }
 
+function normalizeRecurring(items: Array<{
+  id: string;
+  recurringTemplateId: string;
+  titleSnapshot: string;
+  startTimeSnapshotHhmm: string | null;
+  endTimeSnapshotHhmm: string | null;
+  isCompleted: boolean;
+}>): RecurringItemTimed[] {
+  return items.map((item) => ({
+    ...item,
+    editScope: "today" as const,
+  }));
+}
+
 function App() {
   const [mode, setMode] = useState<AppMode>("editing");
   const [planningSecondsLeft, setPlanningSecondsLeft] = useState(PLANNING_TIMER_SECONDS);
@@ -324,6 +342,11 @@ function App() {
     title: "",
     startTime: "09:00",
     endTime: "09:30",
+  });
+  const [recurringDraft, setRecurringDraft] = useState<RecurringDraft>({
+    title: "",
+    startTime: DEFAULT_RECURRING_START_TIME,
+    endTime: DEFAULT_RECURRING_END_TIME,
   });
   const [timeline, setTimeline] = useState<Block[]>([]);
   const [timer, setTimer] = useState<TimerSession | null>(null);
@@ -363,6 +386,10 @@ function App() {
     () => TIME_OPTIONS.filter((time) => parseHhmmToMinutes(time) > parseHhmmToMinutes(dayStartTime)),
     [dayStartTime],
   );
+  const recurringEndOptions = useMemo(
+    () => TIME_OPTIONS.filter((time) => parseHhmmToMinutes(time) > parseHhmmToMinutes(recurringDraft.startTime)),
+    [recurringDraft.startTime],
+  );
 
   useEffect(() => {
     if (parseHhmmToMinutes(dayEndTime) > parseHhmmToMinutes(dayStartTime)) return;
@@ -370,6 +397,13 @@ function App() {
       setDayEndTime(dayEndOptions[0]);
     }
   }, [dayEndOptions, dayEndTime, dayStartTime]);
+
+  useEffect(() => {
+    if (parseHhmmToMinutes(recurringDraft.endTime) > parseHhmmToMinutes(recurringDraft.startTime)) return;
+    if (recurringEndOptions.length > 0) {
+      setRecurringDraft((current) => ({ ...current, endTime: recurringEndOptions[0] }));
+    }
+  }, [recurringDraft.endTime, recurringDraft.startTime, recurringEndOptions]);
 
   const calendarBounds = useMemo(() => {
     const blockStarts = orderedTimeline.map((block) => minutesFromDayStart(block.startTimeIso));
@@ -403,12 +437,13 @@ function App() {
   }, [planningTimerRunning]);
 
   const loadDay = useCallback(async (): Promise<void> => {
-    const [tasksRes, recurringRes, eventsRes, timelineRes, timerRes] = await Promise.all([
+    const [tasksRes, recurringRes, eventsRes, timelineRes, timerRes, defaultsRes] = await Promise.all([
       fetch(`${API}/day/${today}/tasks`),
       fetch(`${API}/day/${today}/recurring`),
       fetch(`${API}/day/${today}/events`),
       fetch(`${API}/day/${today}/timeline`),
       fetch(`${API}/day/${today}/timer-session`),
+      fetch(`${API}/defaults/day-boundaries`),
     ]);
 
     const tasksData = await tasksRes.json();
@@ -416,25 +451,14 @@ function App() {
     const eventsData = await eventsRes.json();
     const timelineData = (await timelineRes.json()) as { blocks: Block[] };
     const timerData = await timerRes.json();
+    const defaultsData = (await defaultsRes.json()) as DayBoundaryDefaults;
 
     setTasks(tasksData.tasks.map((task: { title: string; estimatedPomodoros: number | null }) => ({
       clientId: newClientId(),
       title: task.title,
       estimatedPomodoros: task.estimatedPomodoros ?? undefined,
     })));
-    setRecurring(
-      recurringData.recurring.map((item: {
-        id: string;
-        recurringTemplateId: string;
-        titleSnapshot: string;
-        startTimeSnapshotHhmm: string | null;
-        endTimeSnapshotHhmm: string | null;
-        isCompleted: boolean;
-      }) => ({
-        ...item,
-        editScope: "today" as const,
-      })),
-    );
+    setRecurring(normalizeRecurring(recurringData.recurring));
     setEvents(
       eventsData.events.map((event: { title: string; startTimeIso: string; endTimeIso: string }) => ({
         clientId: newClientId(),
@@ -446,6 +470,8 @@ function App() {
     const loadedTimeline = sortByStartTime(timelineData.blocks);
     setTimeline(loadedTimeline);
     setTimer(timerData.session);
+    setDayStartTime(defaultsData.dayStartTimeHhmm ?? DEFAULT_DAY_START_TIME);
+    setDayEndTime(defaultsData.dayEndTimeHhmm ?? DEFAULT_DAY_END_TIME);
     setMode(loadedTimeline.length > 0 ? "timeline" : "editing");
     setLoading(false);
   }, []);
@@ -453,6 +479,28 @@ function App() {
   useEffect(() => {
     void loadDay();
   }, [loadDay]);
+
+  async function persistDayBoundaryDefaults(next: DayBoundaryDefaults): Promise<void> {
+    await fetch(`${API}/defaults/day-boundaries`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(next),
+    });
+  }
+
+  function handleDayStartTimeChange(nextStartTime: string): void {
+    const nextEndTime = parseHhmmToMinutes(dayEndTime) > parseHhmmToMinutes(nextStartTime)
+      ? dayEndTime
+      : TIME_OPTIONS.find((time) => parseHhmmToMinutes(time) > parseHhmmToMinutes(nextStartTime)) ?? DEFAULT_DAY_END_TIME;
+    setDayStartTime(nextStartTime);
+    setDayEndTime(nextEndTime);
+    void persistDayBoundaryDefaults({ dayStartTimeHhmm: nextStartTime, dayEndTimeHhmm: nextEndTime });
+  }
+
+  function handleDayEndTimeChange(nextEndTime: string): void {
+    setDayEndTime(nextEndTime);
+    void persistDayBoundaryDefaults({ dayStartTimeHhmm: dayStartTime, dayEndTimeHhmm: nextEndTime });
+  }
 
   async function saveDay(): Promise<void> {
     await fetch(`${API}/day/${today}/tasks`, {
@@ -521,19 +569,7 @@ function App() {
     const recurringData = await recurringRes.json();
     const timerData = await timerRes.json();
     setTimeline(sortByStartTime(timelineData.blocks));
-    setRecurring(
-      recurringData.recurring.map((item: {
-        id: string;
-        recurringTemplateId: string;
-        titleSnapshot: string;
-        startTimeSnapshotHhmm: string | null;
-        endTimeSnapshotHhmm: string | null;
-        isCompleted: boolean;
-      }) => ({
-        ...item,
-        editScope: "today" as const,
-      })),
-    );
+    setRecurring(normalizeRecurring(recurringData.recurring));
     setTimer(timerData.session);
     setEditingTimelineBlockId(null);
     setMode("timeline");
@@ -547,6 +583,21 @@ function App() {
     const confirmed = window.confirm("Reset this day and regenerate the timeline from scratch?");
     if (!confirmed) return;
     await runDayRebuild("reset-and-generate");
+  }
+
+  async function clearDay(): Promise<void> {
+    const confirmed = window.confirm("Clear today's tasks and events, and reset recurring tasks to defaults?");
+    if (!confirmed) return;
+    const clearRes = await fetch(`${API}/day/${today}/clear`, { method: "POST" });
+    const clearData = await clearRes.json();
+    setTasks([]);
+    setEvents([]);
+    setTimeline([]);
+    setRecurring(normalizeRecurring(clearData.recurring));
+    setTimer(clearData.session);
+    setUnscheduledCount(0);
+    setEditingTimelineBlockId(null);
+    setMode("editing");
   }
 
   async function persistTimer(next: TimerSession): Promise<void> {
@@ -693,6 +744,28 @@ function App() {
     setEventDraft({ clientId: newClientId(), title: "", startTime: "09:00", endTime: "09:30" });
   }
 
+  async function addRecurringTemplate(): Promise<void> {
+    const title = recurringDraft.title.trim();
+    if (!title) return;
+    const response = await fetch(`${API}/day/${today}/recurring-templates`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title,
+        startTimeHhmm: recurringDraft.startTime,
+        endTimeHhmm: recurringDraft.endTime,
+      }),
+    });
+    if (!response.ok) return;
+    const data = await response.json();
+    setRecurring(normalizeRecurring(data.recurring));
+    setRecurringDraft({
+      title: "",
+      startTime: recurringDraft.startTime,
+      endTime: recurringDraft.endTime,
+    });
+  }
+
   function updateEvent(clientId: string, updates: Partial<EventInput>): void {
     setEvents((current) => current.map((event) => (event.clientId === clientId ? { ...event, ...updates } : event)));
   }
@@ -790,21 +863,26 @@ function App() {
         <section className="editing-layout">
           <div>
             <div className="section-heading">
-              <div>
+              <div className="planning-heading">
                 <h2>Plan the Day</h2>
                 <p>Add work, eliminate recurring items, and block calendar events before saving the timeline.</p>
               </div>
-              <button disabled={tasks.length === 0} onClick={() => void saveDay()}>
-                <Save size={18} aria-hidden="true" />
-                <span>Save Day</span>
-              </button>
+              <div className="section-actions">
+                <button onClick={() => void clearDay()}>
+                  <RotateCcw size={18} aria-hidden="true" />
+                  <span>Clear Day</span>
+                </button>
+                <button disabled={tasks.length === 0} onClick={() => void saveDay()}>
+                  <Save size={18} aria-hidden="true" />
+                  <span>Save Day</span>
+                </button>
+              </div>
             </div>
             <section className="day-boundary-controls panel">
-              <h3>Calendar Day</h3>
               <div className="day-boundary-fields">
                 <label>
                   <span>Day Start</span>
-                  <select value={dayStartTime} onChange={(event) => setDayStartTime(event.target.value)} aria-label="Day start time">
+                  <select value={dayStartTime} onChange={(event) => handleDayStartTimeChange(event.target.value)} aria-label="Day start time">
                     {TIME_OPTIONS.map((time) => (
                       <option key={time} value={time}>{formatSelectTime(time)}</option>
                     ))}
@@ -812,7 +890,7 @@ function App() {
                 </label>
                 <label>
                   <span>Day End</span>
-                  <select value={dayEndTime} onChange={(event) => setDayEndTime(event.target.value)} aria-label="Day end time">
+                  <select value={dayEndTime} onChange={(event) => handleDayEndTimeChange(event.target.value)} aria-label="Day end time">
                     {dayEndOptions.map((time) => (
                       <option key={time} value={time}>{formatSelectTime(time)}</option>
                     ))}
@@ -863,6 +941,35 @@ function App() {
 
               <div className="panel">
                 <h3>Recurring Tasks</h3>
+                <div className="add-card recurring-add-card">
+                  <input
+                    value={recurringDraft.title}
+                    onChange={(event) => setRecurringDraft((current) => ({ ...current, title: event.target.value }))}
+                    placeholder="New recurring task"
+                    aria-label="New recurring task title"
+                  />
+                  <select
+                    value={recurringDraft.startTime}
+                    onChange={(event) => setRecurringDraft((current) => ({ ...current, startTime: event.target.value }))}
+                    aria-label="New recurring start time"
+                  >
+                    {TIME_OPTIONS.map((time) => (
+                      <option key={time} value={time}>{formatSelectTime(time)}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={recurringDraft.endTime}
+                    onChange={(event) => setRecurringDraft((current) => ({ ...current, endTime: event.target.value }))}
+                    aria-label="New recurring end time"
+                  >
+                    {recurringEndOptions.map((time) => (
+                      <option key={time} value={time}>{formatEndOptionLabel(recurringDraft.startTime, time)}</option>
+                    ))}
+                  </select>
+                  <button onClick={() => void addRecurringTemplate()} aria-label="Add recurring task default" title="Add recurring task default">
+                    <Plus size={18} aria-hidden="true" />
+                  </button>
+                </div>
                 <ul className="editable-list">
                   {recurring.map((item) => (
                     <li key={item.id}>
