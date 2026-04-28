@@ -1,14 +1,22 @@
 import { Check, Coffee, Minus, Pause, Pencil, Play, Plus, RotateCcw, Save, SkipForward, X } from "lucide-react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type AppMode = "editing" | "timeline";
 type TaskInput = { clientId: string; title: string; estimatedPomodoros?: number };
-type RecurringItem = { id: string; titleSnapshot: string; isCompleted: boolean };
+type RecurringItemTimed = {
+  id: string;
+  recurringTemplateId: string;
+  titleSnapshot: string;
+  startTimeSnapshotHhmm: string | null;
+  endTimeSnapshotHhmm: string | null;
+  isCompleted: boolean;
+  editScope: "today" | "template";
+};
 type EventInput = { clientId: string; title: string; startTime: string; endTime: string };
 type Block = {
   id: string;
-  blockType: "focus" | "break" | "fixed_event";
+  blockType: "focus" | "break" | "fixed_event" | "recurring_event";
   sourceTaskId: string | null;
   sourceEventId: string | null;
   label: string;
@@ -35,12 +43,24 @@ type TimelineEditDraft = {
   startTime: string;
   endTime: string;
 };
+type TimerCardVariant = "planning" | Block["blockType"] | "empty";
+type TimerCardProps = {
+  title: string;
+  variant: TimerCardVariant;
+  timeText: string;
+  labelText?: string;
+  stateText?: string;
+  helperText?: string;
+  progressPercent?: number;
+  progressDanger?: boolean;
+  actions: ReactNode;
+};
 
 const API = "http://localhost:3001/api";
 const today = new Date().toISOString().slice(0, 10);
 const PLANNING_TIMER_SECONDS = 10 * 60;
-const CALENDAR_START_HOUR = 7;
-const CALENDAR_END_HOUR = 19;
+const DEFAULT_DAY_START_TIME = "07:00";
+const DEFAULT_DAY_END_TIME = "19:00";
 const HOUR_HEIGHT_PX = 96;
 const TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
   const hours = Math.floor(index / 2);
@@ -59,6 +79,40 @@ function formatTime(iso: string): string {
 
 function formatSelectTime(time: string): string {
   return new Date(`${today}T${time}:00`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function parseHhmmToMinutes(time: string): number {
+  const [hoursText, minutesText] = time.split(":");
+  const hours = Number(hoursText);
+  const minutes = Number(minutesText);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return 0;
+  return hours * 60 + minutes;
+}
+
+function formatMinutesToHhmm(totalMinutes: number): string {
+  const wrappedMinutes = ((totalMinutes % 1440) + 1440) % 1440;
+  const hours = Math.floor(wrappedMinutes / 60);
+  const minutes = wrappedMinutes % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function durationMinutesFromRange(startTime: string, endTime: string): number {
+  const startMinutes = parseHhmmToMinutes(startTime);
+  const endMinutes = parseHhmmToMinutes(endTime);
+  return endMinutes > startMinutes ? endMinutes - startMinutes : endMinutes + 1440 - startMinutes;
+}
+
+function formatDurationHoursLabel(durationMinutes: number): string {
+  if (durationMinutes <= 0) return "invalid range";
+  const durationHours = durationMinutes / 60;
+  const durationText = Number.isInteger(durationHours) ? `${durationHours}` : `${durationHours.toFixed(1)}`;
+  const hourWord = durationHours === 1 ? "hour" : "hours";
+  return `${durationText} ${hourWord}`;
+}
+
+function formatEndOptionLabel(startTime: string, optionTime: string): string {
+  const durationMinutes = durationMinutesFromRange(startTime, optionTime);
+  return `${formatSelectTime(optionTime)} (+${formatDurationHoursLabel(durationMinutes)})`;
 }
 
 function formatDateParts(dateIso: string): { weekday: string; dateText: string } {
@@ -105,7 +159,10 @@ function addMinutesIso(iso: string, minutes: number): string {
 }
 
 function blockClass(block: Block): string {
-  const blockTypeClass = block.blockType === "fixed_event" ? "calendar-block-event" : `calendar-block-${block.blockType}`;
+  const blockTypeClass =
+    block.blockType === "fixed_event" ? "calendar-block-event"
+      : block.blockType === "recurring_event" ? "calendar-block-recurring"
+        : `calendar-block-${block.blockType}`;
   return `calendar-block ${blockTypeClass}${block.status === "completed" ? " completed" : ""}`;
 }
 
@@ -163,7 +220,7 @@ function assignMeetingLanes(events: Block[]): Map<string, { laneIndex: number; l
 
 function buildCalendarItems(blocks: Block[]): CalendarItem[] {
   const consumedBreakIds = new Set<string>();
-  const eventLaneMap = assignMeetingLanes(blocks.filter((block) => block.blockType === "fixed_event"));
+  const eventLaneMap = assignMeetingLanes(blocks.filter((block) => block.blockType === "fixed_event" || block.blockType === "recurring_event"));
   const calendarItems: CalendarItem[] = [];
 
   blocks.forEach((block, index) => {
@@ -178,7 +235,7 @@ function buildCalendarItems(blocks: Block[]): CalendarItem[] {
       calendarItems.push({ id: block.id, block, breakBlock, kind: "focus-session", laneIndex: 0, laneCount: 1 });
       return;
     }
-    if (block.blockType === "fixed_event") {
+    if (block.blockType === "fixed_event" || block.blockType === "recurring_event") {
       const lane = eventLaneMap.get(block.id) ?? { laneIndex: 0, laneCount: 1 };
       calendarItems.push({ id: block.id, block, kind: "fixed_event", ...lane });
       return;
@@ -221,13 +278,46 @@ function countTimelineConflicts(items: CalendarItem[]): number {
   return conflictCount;
 }
 
+function TimerCard({
+  title,
+  variant,
+  timeText,
+  labelText,
+  stateText,
+  helperText,
+  progressPercent,
+  progressDanger = false,
+  actions,
+}: TimerCardProps) {
+  const hasProgress = typeof progressPercent === "number";
+
+  return (
+    <div className={`panel timer-card timer-card-${variant}`}>
+      <h3>{title}</h3>
+      {labelText && <p className="timer-card-label"><strong>{labelText}</strong></p>}
+      <p className="timer-card-time">{timeText}</p>
+      {hasProgress && (
+        <div className="progress-track" aria-label="Timer progress">
+          <div
+            className={`progress-fill${progressDanger ? " danger" : ""}`}
+            style={{ width: `${progressPercent}%` }}
+          />
+        </div>
+      )}
+      {stateText && <p className="muted">{stateText}</p>}
+      <div className="row">{actions}</div>
+      {helperText && <p className="muted">{helperText}</p>}
+    </div>
+  );
+}
+
 function App() {
   const [mode, setMode] = useState<AppMode>("editing");
   const [planningSecondsLeft, setPlanningSecondsLeft] = useState(PLANNING_TIMER_SECONDS);
   const [planningTimerRunning, setPlanningTimerRunning] = useState(false);
   const [tasks, setTasks] = useState<TaskInput[]>([]);
   const [taskDraft, setTaskDraft] = useState("");
-  const [recurring, setRecurring] = useState<RecurringItem[]>([]);
+  const [recurring, setRecurring] = useState<RecurringItemTimed[]>([]);
   const [events, setEvents] = useState<EventInput[]>([]);
   const [eventDraft, setEventDraft] = useState<EventInput>({
     clientId: newClientId(),
@@ -237,6 +327,8 @@ function App() {
   });
   const [timeline, setTimeline] = useState<Block[]>([]);
   const [timer, setTimer] = useState<TimerSession | null>(null);
+  const [dayStartTime, setDayStartTime] = useState(DEFAULT_DAY_START_TIME);
+  const [dayEndTime, setDayEndTime] = useState(DEFAULT_DAY_END_TIME);
   const [editingTimelineBlockId, setEditingTimelineBlockId] = useState<string | null>(null);
   const [timelineEditDraft, setTimelineEditDraft] = useState<TimelineEditDraft>({ label: "", startTime: "", endTime: "" });
   const [unscheduledCount, setUnscheduledCount] = useState(0);
@@ -255,19 +347,40 @@ function App() {
   const displayedBlockDurationSeconds = durationInSeconds(displayedBlock);
   const displayedElapsedSeconds = activeBlock ? (timer?.elapsedSeconds ?? 0) : 0;
   const remainingSeconds = Math.max(displayedBlockDurationSeconds - displayedElapsedSeconds, 0);
+  const planningProgressPercent = Math.min(((PLANNING_TIMER_SECONDS - planningSecondsLeft) / PLANNING_TIMER_SECONDS) * 100, 100);
+  const planningState =
+    planningSecondsLeft === 0 ? "completed"
+      : planningTimerRunning ? "running"
+        : planningSecondsLeft === PLANNING_TIMER_SECONDS ? "idle"
+          : "paused";
   const timerProgressPercent =
     displayedBlockDurationSeconds > 0 ? Math.min((displayedElapsedSeconds / displayedBlockDurationSeconds) * 100, 100) : 0;
   const timerAlmostDone = displayedBlockDurationSeconds > 0 && remainingSeconds <= displayedBlockDurationSeconds * 0.2;
   const hasActiveBlock = Boolean(timer?.activeBlockId);
   const timerIsRunningWithBlock = timer?.state === "running" && hasActiveBlock;
   const dateParts = useMemo(() => formatDateParts(today), []);
+  const dayEndOptions = useMemo(
+    () => TIME_OPTIONS.filter((time) => parseHhmmToMinutes(time) > parseHhmmToMinutes(dayStartTime)),
+    [dayStartTime],
+  );
+
+  useEffect(() => {
+    if (parseHhmmToMinutes(dayEndTime) > parseHhmmToMinutes(dayStartTime)) return;
+    if (dayEndOptions.length > 0) {
+      setDayEndTime(dayEndOptions[0]);
+    }
+  }, [dayEndOptions, dayEndTime, dayStartTime]);
+
   const calendarBounds = useMemo(() => {
     const blockStarts = orderedTimeline.map((block) => minutesFromDayStart(block.startTimeIso));
     const blockEnds = orderedTimeline.map((block) => minutesFromDayStart(block.endTimeIso));
-    const startHour = Math.min(CALENDAR_START_HOUR, Math.floor(Math.min(...blockStarts, CALENDAR_START_HOUR * 60) / 60));
-    const endHour = Math.max(CALENDAR_END_HOUR, Math.ceil(Math.max(...blockEnds, CALENDAR_END_HOUR * 60) / 60));
-    return { startHour, endHour, totalMinutes: (endHour - startHour) * 60 };
-  }, [orderedTimeline]);
+    const selectedStartMinutes = parseHhmmToMinutes(dayStartTime);
+    const selectedEndMinutes = parseHhmmToMinutes(dayEndTime);
+    const startHour = Math.min(Math.floor(selectedStartMinutes / 60), Math.floor(Math.min(...blockStarts, selectedStartMinutes) / 60));
+    const endHour = Math.max(Math.ceil(selectedEndMinutes / 60), Math.ceil(Math.max(...blockEnds, selectedEndMinutes) / 60));
+    const clampedEndHour = Math.max(startHour + 1, endHour);
+    return { startHour, endHour: clampedEndHour, totalMinutes: (clampedEndHour - startHour) * 60 };
+  }, [dayEndTime, dayStartTime, orderedTimeline]);
   const calendarHours = useMemo(
     () => Array.from({ length: calendarBounds.endHour - calendarBounds.startHour + 1 }, (_, index) => calendarBounds.startHour + index),
     [calendarBounds.endHour, calendarBounds.startHour],
@@ -309,7 +422,19 @@ function App() {
       title: task.title,
       estimatedPomodoros: task.estimatedPomodoros ?? undefined,
     })));
-    setRecurring(recurringData.recurring);
+    setRecurring(
+      recurringData.recurring.map((item: {
+        id: string;
+        recurringTemplateId: string;
+        titleSnapshot: string;
+        startTimeSnapshotHhmm: string | null;
+        endTimeSnapshotHhmm: string | null;
+        isCompleted: boolean;
+      }) => ({
+        ...item,
+        editScope: "today" as const,
+      })),
+    );
     setEvents(
       eventsData.events.map((event: { title: string; startTimeIso: string; endTimeIso: string }) => ({
         clientId: newClientId(),
@@ -342,7 +467,14 @@ function App() {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        recurring: recurring.map((item) => ({ id: item.id, isCompleted: item.isCompleted })),
+        recurring: recurring.map((item) => ({
+          id: item.id,
+          isCompleted: item.isCompleted,
+          titleSnapshot: item.titleSnapshot,
+          startTimeHhmm: item.startTimeSnapshotHhmm,
+          endTimeHhmm: item.endTimeSnapshotHhmm,
+          editScope: item.editScope,
+        })),
       }),
     });
 
@@ -358,7 +490,11 @@ function App() {
       }),
     });
 
-    const planRes = await fetch(`${API}/day/${today}/generate-plan`, { method: "POST" });
+    const planRes = await fetch(`${API}/day/${today}/generate-plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dayStartTimeHhmm: dayStartTime, dayEndTimeHhmm: dayEndTime }),
+    });
     const planData = await planRes.json();
     setUnscheduledCount(planData.unscheduledTasks.length);
     const timelineRes = await fetch(`${API}/day/${today}/timeline`);
@@ -368,14 +504,49 @@ function App() {
     setMode("timeline");
   }
 
-  async function regenerateTimeline(): Promise<void> {
-    const planRes = await fetch(`${API}/day/${today}/generate-plan`, { method: "POST" });
+  async function runDayRebuild(endpoint: "generate-plan" | "reset-and-generate"): Promise<void> {
+    const planRes = await fetch(`${API}/day/${today}/${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dayStartTimeHhmm: dayStartTime, dayEndTimeHhmm: dayEndTime }),
+    });
     const planData = await planRes.json();
     setUnscheduledCount(planData.unscheduledTasks.length);
-    const timelineRes = await fetch(`${API}/day/${today}/timeline`);
+    const [timelineRes, recurringRes, timerRes] = await Promise.all([
+      fetch(`${API}/day/${today}/timeline`),
+      fetch(`${API}/day/${today}/recurring`),
+      fetch(`${API}/day/${today}/timer-session`),
+    ]);
     const timelineData = (await timelineRes.json()) as { blocks: Block[] };
+    const recurringData = await recurringRes.json();
+    const timerData = await timerRes.json();
     setTimeline(sortByStartTime(timelineData.blocks));
+    setRecurring(
+      recurringData.recurring.map((item: {
+        id: string;
+        recurringTemplateId: string;
+        titleSnapshot: string;
+        startTimeSnapshotHhmm: string | null;
+        endTimeSnapshotHhmm: string | null;
+        isCompleted: boolean;
+      }) => ({
+        ...item,
+        editScope: "today" as const,
+      })),
+    );
+    setTimer(timerData.session);
     setEditingTimelineBlockId(null);
+    setMode("timeline");
+  }
+
+  async function regenerateTimeline(): Promise<void> {
+    await runDayRebuild("reset-and-generate");
+  }
+
+  async function resetDay(): Promise<void> {
+    const confirmed = window.confirm("Reset this day and regenerate the timeline from scratch?");
+    if (!confirmed) return;
+    await runDayRebuild("reset-and-generate");
   }
 
   async function persistTimer(next: TimerSession): Promise<void> {
@@ -526,6 +697,47 @@ function App() {
     setEvents((current) => current.map((event) => (event.clientId === clientId ? { ...event, ...updates } : event)));
   }
 
+  function handleEventDraftStartChange(nextStartTime: string): void {
+    setEventDraft((current) => {
+      const durationMinutes = durationMinutesFromRange(current.startTime, current.endTime);
+      return {
+        ...current,
+        startTime: nextStartTime,
+        endTime: formatMinutesToHhmm(parseHhmmToMinutes(nextStartTime) + durationMinutes),
+      };
+    });
+  }
+
+  function handleEventStartChange(clientId: string, nextStartTime: string): void {
+    setEvents((current) =>
+      current.map((event) => {
+        if (event.clientId !== clientId) return event;
+        const durationMinutes = durationMinutesFromRange(event.startTime, event.endTime);
+        return {
+          ...event,
+          startTime: nextStartTime,
+          endTime: formatMinutesToHhmm(parseHhmmToMinutes(nextStartTime) + durationMinutes),
+        };
+      }),
+    );
+  }
+
+  function handleRecurringStartChange(itemId: string, nextStartTime: string): void {
+    setRecurring((current) =>
+      current.map((entry) => {
+        if (entry.id !== itemId) return entry;
+        const currentStart = entry.startTimeSnapshotHhmm ?? "07:00";
+        const currentEnd = entry.endTimeSnapshotHhmm ?? "07:30";
+        const durationMinutes = durationMinutesFromRange(currentStart, currentEnd);
+        return {
+          ...entry,
+          startTimeSnapshotHhmm: nextStartTime,
+          endTimeSnapshotHhmm: formatMinutesToHhmm(parseHhmmToMinutes(nextStartTime) + durationMinutes),
+        };
+      }),
+    );
+  }
+
   function deleteEvent(clientId: string): void {
     setEvents((current) => current.filter((event) => event.clientId !== clientId));
   }
@@ -568,7 +780,7 @@ function App() {
     <main className="app">
       <header className="app-header">
         <div>
-          <p className="eyebrow">Morning Planner</p>
+          <p className="eyebrow">Pom Day</p>
           <h1>{dateParts.dateText}</h1>
         </div>
         <div className="weekday-badge">{dateParts.weekday}</div>
@@ -587,6 +799,27 @@ function App() {
                 <span>Save Day</span>
               </button>
             </div>
+            <section className="day-boundary-controls panel">
+              <h3>Calendar Day</h3>
+              <div className="day-boundary-fields">
+                <label>
+                  <span>Day Start</span>
+                  <select value={dayStartTime} onChange={(event) => setDayStartTime(event.target.value)} aria-label="Day start time">
+                    {TIME_OPTIONS.map((time) => (
+                      <option key={time} value={time}>{formatSelectTime(time)}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Day End</span>
+                  <select value={dayEndTime} onChange={(event) => setDayEndTime(event.target.value)} aria-label="Day end time">
+                    {dayEndOptions.map((time) => (
+                      <option key={time} value={time}>{formatSelectTime(time)}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </section>
 
             <div className="edit-panels">
               <div className="panel">
@@ -629,12 +862,54 @@ function App() {
               </div>
 
               <div className="panel">
-                <h3>Eliminate Recurring Tasks</h3>
+                <h3>Recurring Tasks</h3>
                 <ul className="editable-list">
                   {recurring.map((item) => (
                     <li key={item.id}>
-                      <div className="item-row">
-                        <span className={item.isCompleted ? "done" : ""}>{item.titleSnapshot}</span>
+                      <div className="edit-row recurring-entry">
+                        <input
+                          value={item.titleSnapshot}
+                          onChange={(event) =>
+                            setRecurring((current) =>
+                              current.map((entry) => (entry.id === item.id ? { ...entry, titleSnapshot: event.target.value } : entry)),
+                            )
+                          }
+                          aria-label="Recurring task title"
+                        />
+                        <select
+                          value={item.startTimeSnapshotHhmm ?? "07:00"}
+                          onChange={(event) => handleRecurringStartChange(item.id, event.target.value)}
+                          aria-label="Recurring start time"
+                        >
+                          {TIME_OPTIONS.map((time) => (
+                            <option key={time} value={time}>{formatSelectTime(time)}</option>
+                          ))}
+                        </select>
+                        <select
+                          value={item.endTimeSnapshotHhmm ?? "07:30"}
+                          onChange={(event) =>
+                            setRecurring((current) =>
+                              current.map((entry) => (entry.id === item.id ? { ...entry, endTimeSnapshotHhmm: event.target.value } : entry)),
+                            )
+                          }
+                          aria-label="Recurring end time"
+                        >
+                          {TIME_OPTIONS.map((time) => (
+                            <option key={time} value={time}>{formatEndOptionLabel(item.startTimeSnapshotHhmm ?? "07:00", time)}</option>
+                          ))}
+                        </select>
+                        <select
+                          value={item.editScope}
+                          onChange={(event) =>
+                            setRecurring((current) =>
+                              current.map((entry) => (entry.id === item.id ? { ...entry, editScope: event.target.value as "today" | "template" } : entry)),
+                            )
+                          }
+                          aria-label="Edit scope"
+                        >
+                          <option value="today">Today only</option>
+                          <option value="template">Every day</option>
+                        </select>
                         <button
                           onClick={() =>
                             setRecurring((current) =>
@@ -643,8 +918,9 @@ function App() {
                               ),
                             )
                           }
+                          aria-label={item.isCompleted ? "Mark recurring as not completed" : "Mark recurring as completed"}
                         >
-                          {item.isCompleted ? <RotateCcw size={18} aria-hidden="true" /> : <X size={18} aria-hidden="true" />}
+                          {item.isCompleted ? <RotateCcw size={18} aria-hidden="true" /> : <Check size={18} aria-hidden="true" />}
                         </button>
                       </div>
                     </li>
@@ -662,7 +938,7 @@ function App() {
                   />
                   <select
                     value={eventDraft.startTime}
-                    onChange={(event) => setEventDraft((current) => ({ ...current, startTime: event.target.value }))}
+                    onChange={(event) => handleEventDraftStartChange(event.target.value)}
                     aria-label="Event start"
                   >
                     {TIME_OPTIONS.map((time) => (
@@ -675,7 +951,7 @@ function App() {
                     aria-label="Event end"
                   >
                     {TIME_OPTIONS.map((time) => (
-                      <option key={time} value={time}>{formatSelectTime(time)}</option>
+                      <option key={time} value={time}>{formatEndOptionLabel(eventDraft.startTime, time)}</option>
                     ))}
                   </select>
                   <button onClick={addEvent} aria-label="Add event" title="Add event">
@@ -693,7 +969,7 @@ function App() {
                         />
                         <select
                           value={eventItem.startTime}
-                          onChange={(event) => updateEvent(eventItem.clientId, { startTime: event.target.value })}
+                          onChange={(event) => handleEventStartChange(eventItem.clientId, event.target.value)}
                           aria-label="Event start"
                         >
                           {TIME_OPTIONS.map((time) => (
@@ -706,7 +982,7 @@ function App() {
                           aria-label="Event end"
                         >
                           {TIME_OPTIONS.map((time) => (
-                            <option key={time} value={time}>{formatSelectTime(time)}</option>
+                            <option key={time} value={time}>{formatEndOptionLabel(eventItem.startTime, time)}</option>
                           ))}
                         </select>
                         <button onClick={() => deleteEvent(eventItem.clientId)} aria-label="Remove event" title="Remove event">
@@ -720,21 +996,25 @@ function App() {
             </div>
           </div>
 
-          <div className="panel timer-card">
-            <h3>Planning Timer</h3>
-            <p className="timer-display">
-              {Math.floor(planningSecondsLeft / 60)}:{String(planningSecondsLeft % 60).padStart(2, "0")}
-            </p>
-            <div className="row">
-              <button onClick={togglePlanningTimer} aria-label={planningTimerRunning ? "Pause planning timer" : "Start planning timer"}>
-                {planningTimerRunning ? <Pause size={18} aria-hidden="true" /> : <Play size={18} aria-hidden="true" />}
-              </button>
-              <button onClick={resetPlanningTimer} aria-label="Reset planning timer">
-                <RotateCcw size={18} aria-hidden="true" />
-              </button>
-            </div>
-            <p className="muted">Use this 10-minute timer to time box your planning session.</p>
-          </div>
+          <TimerCard
+            title="Planning Timer"
+            variant="planning"
+            labelText="Planning session"
+            timeText={`${Math.floor(planningSecondsLeft / 60)}:${String(planningSecondsLeft % 60).padStart(2, "0")}`}
+            progressPercent={planningProgressPercent}
+            stateText={`State: ${planningState}`}
+            helperText="Use this 10-minute timer to time box your planning session."
+            actions={(
+              <>
+                <button onClick={togglePlanningTimer} aria-label={planningTimerRunning ? "Pause planning timer" : "Start planning timer"}>
+                  {planningTimerRunning ? <Pause size={18} aria-hidden="true" /> : <Play size={18} aria-hidden="true" />}
+                </button>
+                <button onClick={resetPlanningTimer} aria-label="Reset planning timer">
+                  <RotateCcw size={18} aria-hidden="true" />
+                </button>
+              </>
+            )}
+          />
         </section>
       )}
 
@@ -743,10 +1023,16 @@ function App() {
           <div className="timeline panel">
             <div className="section-heading">
               <h2>Timeline</h2>
-              <button onClick={() => setMode("editing")}>
-                <Pencil size={18} aria-hidden="true" />
-                <span>Edit Timeline</span>
-              </button>
+              <div className="row">
+                <button onClick={() => void resetDay()}>
+                  <RotateCcw size={18} aria-hidden="true" />
+                  <span>Reset Day</span>
+                </button>
+                <button onClick={() => setMode("editing")}>
+                  <Pencil size={18} aria-hidden="true" />
+                  <span>Edit Timeline</span>
+                </button>
+              </div>
             </div>
             {unscheduledCount > 0 && <p className="warning">{unscheduledCount} tasks could not be fully scheduled.</p>}
             {timelineConflictCount > 0 && (
@@ -793,6 +1079,19 @@ function App() {
                             {editingTimelineBlockId !== block.id && <span>{block.label}</span>}
                           </div>
                           <div className="calendar-actions">
+                            {item.breakBlock && (
+                              <div className="calendar-break-segment calendar-break-segment-inline">
+                                <span>{formatTime(item.breakBlock.startTimeIso)}</span>
+                                <button
+                                  onClick={() => void playBlock(item.breakBlock.id)}
+                                  disabled={item.breakBlock.status === "completed"}
+                                  aria-label="Play break"
+                                  title="Play break"
+                                >
+                                  <Coffee size={16} aria-hidden="true" />
+                                </button>
+                              </div>
+                            )}
                             {block.blockType !== "fixed_event" && (
                               <>
                                 <button
@@ -856,21 +1155,6 @@ function App() {
                           </div>
                         )}
                       </div>
-                      {item.breakBlock && (
-                        <div className="calendar-break-segment">
-                          <span>{formatTime(item.breakBlock.startTimeIso)}</span>
-                          <div className="calendar-actions">
-                            <button
-                              onClick={() => void playBlock(item.breakBlock.id)}
-                              disabled={item.breakBlock.status === "completed"}
-                              aria-label="Play break"
-                              title="Play break"
-                            >
-                              <Coffee size={16} aria-hidden="true" />
-                            </button>
-                          </div>
-                        </div>
-                      )}
                     </div>
                   );
                 })}
@@ -878,29 +1162,29 @@ function App() {
             </div>
           </div>
 
-          <div className={`active-timer panel active-timer-${displayedBlock?.blockType ?? "empty"}`}>
-            <h3>Active timer</h3>
-            <p className="active-label"><strong>{displayedBlock?.label ?? "No task ready"}</strong></p>
-            <p className="active-time">{formatTimer(remainingSeconds)}</p>
-            <div className="progress-track" aria-label="Timer progress">
-              <div
-                className={`progress-fill${timerAlmostDone ? " danger" : ""}`}
-                style={{ width: `${timerProgressPercent}%` }}
-              />
-            </div>
-            <p className="muted">State: {timer?.state ?? "idle"}</p>
-            <div className="row">
-              <button onClick={() => void startTimer()} disabled={!timer || timerIsRunningWithBlock} aria-label="Start timer">
-                <Play size={18} aria-hidden="true" />
-              </button>
-              <button onClick={() => void togglePause()} disabled={!timer || timer.state === "idle" || timer.state === "completed"}>
-                {timer?.state === "paused" ? <Play size={18} aria-hidden="true" /> : <Pause size={18} aria-hidden="true" />}
-              </button>
-              <button onClick={() => void skipBlock()} disabled={!timer || !timer.activeBlockId} aria-label="Skip block">
-                <SkipForward size={18} aria-hidden="true" />
-              </button>
-            </div>
-          </div>
+          <TimerCard
+            title="Pomodoro Timer 🍎"
+            variant={displayedBlock?.blockType ?? "empty"}
+            labelText={displayedBlock?.label ?? "No task ready"}
+            timeText={formatTimer(remainingSeconds)}
+            progressPercent={timerProgressPercent}
+            progressDanger={timerAlmostDone}
+            stateText={`State: ${timer?.state ?? "idle"}`}
+            helperText="Stay on this block until complete, then move to the next one."
+            actions={(
+              <>
+                <button onClick={() => void startTimer()} disabled={!timer || timerIsRunningWithBlock} aria-label="Start timer">
+                  <Play size={18} aria-hidden="true" />
+                </button>
+                <button onClick={() => void togglePause()} disabled={!timer || timer.state === "idle" || timer.state === "completed"}>
+                  {timer?.state === "paused" ? <Play size={18} aria-hidden="true" /> : <Pause size={18} aria-hidden="true" />}
+                </button>
+                <button onClick={() => void skipBlock()} disabled={!timer || !timer.activeBlockId} aria-label="Skip block">
+                  <SkipForward size={18} aria-hidden="true" />
+                </button>
+              </>
+            )}
+          />
         </section>
       )}
     </main>

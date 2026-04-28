@@ -1,4 +1,4 @@
-import type { FixedEvent, PlannerResult, ScheduleBlock, Task, UnscheduledTask } from "./types.js";
+import type { BlockType, FixedEvent, PlannerResult, ScheduleBlock, Task, UnscheduledTask } from "./types.js";
 
 const FOCUS_MINUTES = 25;
 const BREAK_MINUTES = 5;
@@ -14,6 +14,11 @@ interface Window {
   end: Date;
 }
 
+interface PlannerWindow {
+  dayStartTimeHhmm?: string;
+  dayEndTimeHhmm?: string;
+}
+
 function addMinutes(start: Date, minutes: number): Date {
   return new Date(start.getTime() + minutes * 60_000);
 }
@@ -26,9 +31,9 @@ function makeIsoAtDate(dateIso: string, timeHHMM: string): string {
   return `${dateIso}T${timeHHMM}:00`;
 }
 
-function buildWindows(dateIso: string, events: FixedEvent[]): Window[] {
-  const dayStart = new Date(makeIsoAtDate(dateIso, "07:00"));
-  const dayEnd = new Date(makeIsoAtDate(dateIso, "22:00"));
+function buildWindows(dateIso: string, events: FixedEvent[], window: PlannerWindow): Window[] {
+  const dayStart = new Date(makeIsoAtDate(dateIso, window.dayStartTimeHhmm ?? "07:00"));
+  const dayEnd = new Date(makeIsoAtDate(dateIso, window.dayEndTimeHhmm ?? "22:00"));
   const sortedEvents = [...events].sort((a, b) => timeValue(a.startTimeIso) - timeValue(b.startTimeIso));
   const windows: Window[] = [];
   let cursor = dayStart;
@@ -79,6 +84,25 @@ function addFixedEventBlocks(fixedEvents: FixedEvent[], dayPlanId: string, block
         startTimeIso: event.startTimeIso,
         endTimeIso: event.endTimeIso,
         sequenceIndex: idx,
+        status: "planned",
+      });
+    });
+}
+
+function addRecurringBlocks(recurring: FixedEvent[], dayPlanId: string, blocks: ScheduleBlock[]): void {
+  recurring
+    .sort((a, b) => timeValue(a.startTimeIso) - timeValue(b.startTimeIso))
+    .forEach((item) => {
+      blocks.push({
+        id: crypto.randomUUID(),
+        dayPlanId,
+        sourceTaskId: null,
+        sourceEventId: null,
+        blockType: "recurring_event" as BlockType,
+        label: item.title,
+        startTimeIso: item.startTimeIso,
+        endTimeIso: item.endTimeIso,
+        sequenceIndex: blocks.length + 1,
         status: "planned",
       });
     });
@@ -140,13 +164,22 @@ function sortAndReindexBlocks(blocks: ScheduleBlock[]): ScheduleBlock[] {
   return blocksSortedByStartTime;
 }
 
-export function generatePlan(dateIso: string, tasks: Task[], fixedEvents: FixedEvent[], dayPlanId: string): PlannerResult {
+export function generatePlan(
+  dateIso: string,
+  tasks: Task[],
+  fixedEvents: FixedEvent[],
+  dayPlanId: string,
+  recurringBlocks: FixedEvent[] = [],
+  window: PlannerWindow = {},
+): PlannerResult {
   const plannedBlocks: ScheduleBlock[] = [];
   const unscheduledTasks: UnscheduledTask[] = [];
-  const freeWindows = buildWindows(dateIso, fixedEvents);
+  const busyEvents = [...fixedEvents, ...recurringBlocks];
+  const freeWindows = buildWindows(dateIso, busyEvents, window);
   const taskSessions = expandSessions(tasks);
 
   addFixedEventBlocks(fixedEvents, dayPlanId, plannedBlocks);
+  addRecurringBlocks(recurringBlocks, dayPlanId, plannedBlocks);
 
   for (const session of taskSessions) {
     scheduleFocusAndBreak(session, freeWindows, dayPlanId, plannedBlocks, unscheduledTasks);

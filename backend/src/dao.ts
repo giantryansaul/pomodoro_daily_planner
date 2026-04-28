@@ -4,6 +4,8 @@ import type {
   EventInput,
   FixedEvent,
   RecurringCompletionUpdate,
+  RecurringEditScope,
+  RecurringUpdate,
   ScheduleBlock,
   Task,
   TaskInput,
@@ -39,18 +41,50 @@ export const dayPlanDao = {
 
   materializeRecurring(dayPlanId: string): void {
     const templates = db
-      .prepare("SELECT id, title, sort_order FROM recurring_templates WHERE is_active = 1 ORDER BY sort_order ASC")
-      .all() as Array<{ id: string; title: string; sort_order: number }>;
+      .prepare(
+        "SELECT id, title, start_time_hhmm as startTimeHhmm, end_time_hhmm as endTimeHhmm, sort_order FROM recurring_templates WHERE is_active = 1 ORDER BY sort_order ASC",
+      )
+      .all() as Array<{ id: string; title: string; startTimeHhmm: string | null; endTimeHhmm: string | null; sort_order: number }>;
     const now = nowIso();
     const stmt = db.prepare(
       `INSERT INTO daily_recurring_items
-      (id, day_plan_id, recurring_template_id, title_snapshot, sort_order, is_completed, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      (id, day_plan_id, recurring_template_id, title_snapshot, start_time_snapshot_hhmm, end_time_snapshot_hhmm, sort_order, is_completed, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const tx = db.transaction(() => {
       for (const template of templates) {
-        stmt.run(crypto.randomUUID(), dayPlanId, template.id, template.title, template.sort_order, 0, now, now);
+        stmt.run(
+          crypto.randomUUID(),
+          dayPlanId,
+          template.id,
+          template.title,
+          template.startTimeHhmm,
+          template.endTimeHhmm,
+          template.sort_order,
+          0,
+          now,
+          now,
+        );
       }
+    });
+    tx();
+  },
+
+  resetDayStateForRebuild(dayPlanId: string): void {
+    const now = nowIso();
+    const tx = db.transaction(() => {
+      db.prepare("DELETE FROM schedule_blocks WHERE day_plan_id = ?").run(dayPlanId);
+      db.prepare("UPDATE tasks SET status = 'pending', updated_at = ? WHERE day_plan_id = ?").run(now, dayPlanId);
+      db.prepare(
+        `UPDATE daily_recurring_items
+         SET is_completed = 0, completed_at = NULL, updated_at = ?
+         WHERE day_plan_id = ?`,
+      ).run(now, dayPlanId);
+      db.prepare(
+        `UPDATE timer_sessions
+         SET active_block_id = NULL, state = 'idle', started_at = NULL, paused_at = NULL, elapsed_seconds = 0, updated_at = ?
+         WHERE day_plan_id = ?`,
+      ).run(now, dayPlanId);
     });
     tx();
   },
@@ -108,7 +142,8 @@ export const recurringDao = {
     const rows = db
       .prepare(
         `SELECT id, day_plan_id as dayPlanId, recurring_template_id as recurringTemplateId,
-         title_snapshot as titleSnapshot, sort_order as sortOrder, is_completed as isCompleted
+         title_snapshot as titleSnapshot, start_time_snapshot_hhmm as startTimeSnapshotHhmm, end_time_snapshot_hhmm as endTimeSnapshotHhmm,
+         sort_order as sortOrder, is_completed as isCompleted
          FROM daily_recurring_items WHERE day_plan_id = ? ORDER BY sort_order ASC`,
       )
       .all(dayPlanId) as Array<Omit<DailyRecurringItem, "isCompleted"> & { isCompleted: number }>;
@@ -123,6 +158,60 @@ export const recurringDao = {
     updates.forEach((item) => {
       stmt.run(item.isCompleted ? 1 : 0, now, item.isCompleted ? now : null, item.id, dayPlanId);
     });
+  },
+
+  updateTimed(dayPlanId: string, updates: RecurringUpdate[]): void {
+    const now = nowIso();
+    const updateDaily = db.prepare(
+      `UPDATE daily_recurring_items
+       SET title_snapshot = ?, start_time_snapshot_hhmm = ?, end_time_snapshot_hhmm = ?, is_completed = ?, updated_at = ?
+       WHERE id = ? AND day_plan_id = ?`,
+    );
+    const updateTemplate = db.prepare(
+      `UPDATE recurring_templates
+       SET title = ?, start_time_hhmm = ?, end_time_hhmm = ?, updated_at = ?
+       WHERE id = ?`,
+    );
+    const updateDailyCompletion = db.prepare(
+      `UPDATE daily_recurring_items
+       SET is_completed = ?, updated_at = ?, completed_at = ?
+       WHERE id = ? AND day_plan_id = ?`,
+    );
+    const lookupTemplateId = db.prepare(
+      "SELECT recurring_template_id as recurringTemplateId FROM daily_recurring_items WHERE id = ? AND day_plan_id = ?",
+    );
+
+    const tx = db.transaction(() => {
+      for (const update of updates) {
+        const scope: RecurringEditScope = update.editScope ?? "today";
+        if (scope === "template") {
+          const row = lookupTemplateId.get(update.id, dayPlanId) as { recurringTemplateId: string } | undefined;
+          if (row) {
+            updateTemplate.run(
+              update.titleSnapshot ?? "",
+              update.startTimeHhmm ?? null,
+              update.endTimeHhmm ?? null,
+              now,
+              row.recurringTemplateId,
+            );
+          }
+        }
+        if (update.titleSnapshot || update.startTimeHhmm || update.endTimeHhmm) {
+          updateDaily.run(
+            update.titleSnapshot ?? "",
+            update.startTimeHhmm ?? null,
+            update.endTimeHhmm ?? null,
+            update.isCompleted ? 1 : 0,
+            now,
+            update.id,
+            dayPlanId,
+          );
+        } else {
+          updateDailyCompletion.run(update.isCompleted ? 1 : 0, now, update.isCompleted ? now : null, update.id, dayPlanId);
+        }
+      }
+    });
+    tx();
   },
 };
 
@@ -143,6 +232,7 @@ export const eventDao = {
       "INSERT INTO fixed_events (id, day_plan_id, title, start_time_iso, end_time_iso, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     );
     const tx = db.transaction(() => {
+      db.prepare("UPDATE schedule_blocks SET source_event_id = NULL WHERE day_plan_id = ?").run(dayPlanId);
       db.prepare("DELETE FROM fixed_events WHERE day_plan_id = ?").run(dayPlanId);
       const seen = new Set<string>();
       events.forEach((event) => {

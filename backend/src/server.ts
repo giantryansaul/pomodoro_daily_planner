@@ -3,7 +3,7 @@ import express from "express";
 import { getDbPath, initDb } from "./db.js";
 import { dayPlanDao, eventDao, recurringDao, scheduleBlockDao, taskDao, timerSessionDao } from "./dao.js";
 import { generatePlan } from "./planner.js";
-import type { EventInput, RecurringCompletionUpdate, TaskInput } from "./types.js";
+import type { EventInput, RecurringUpdate, TaskInput } from "./types.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 3001);
@@ -12,6 +12,40 @@ app.use(cors());
 app.use(express.json());
 
 initDb();
+
+function generateAndPersistDayPlan(
+  dateIso: string,
+  dayPlanId: string,
+  plannerWindow: { dayStartTimeHhmm?: string; dayEndTimeHhmm?: string } = {},
+): ReturnType<typeof generatePlan> {
+  const tasks = taskDao.listForDay(dayPlanId);
+  const events = eventDao.listForDay(dayPlanId);
+  const recurring = recurringDao.listForDay(dayPlanId)
+    .filter((item) => item.startTimeSnapshotHhmm && item.endTimeSnapshotHhmm)
+    .map((item) => ({
+      id: item.id,
+      dayPlanId,
+      title: item.titleSnapshot,
+      startTimeIso: `${dateIso}T${item.startTimeSnapshotHhmm}:00`,
+      endTimeIso: `${dateIso}T${item.endTimeSnapshotHhmm}:00`,
+    }));
+  const plan = generatePlan(dateIso, tasks, events, dayPlanId, recurring, plannerWindow);
+  scheduleBlockDao.replacePlanned(dayPlanId, plan.blocks);
+  return plan;
+}
+
+function parsePlannerWindow(body: unknown): { dayStartTimeHhmm?: string; dayEndTimeHhmm?: string } {
+  if (!body || typeof body !== "object") return {};
+  const payload = body as { dayStartTimeHhmm?: unknown; dayEndTimeHhmm?: unknown };
+  const dayStartTimeHhmm = typeof payload.dayStartTimeHhmm === "string" ? payload.dayStartTimeHhmm : undefined;
+  const dayEndTimeHhmm = typeof payload.dayEndTimeHhmm === "string" ? payload.dayEndTimeHhmm : undefined;
+  const hhmmPattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+  if (!dayStartTimeHhmm || !dayEndTimeHhmm || !hhmmPattern.test(dayStartTimeHhmm) || !hhmmPattern.test(dayEndTimeHhmm)) {
+    return {};
+  }
+  if (dayStartTimeHhmm >= dayEndTimeHhmm) return {};
+  return { dayStartTimeHhmm, dayEndTimeHhmm };
+}
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, dbPath: getDbPath() });
@@ -38,8 +72,16 @@ app.get("/api/day/:date/recurring", (req, res) => {
 
 app.put("/api/day/:date/recurring", (req, res) => {
   const dayPlan = dayPlanDao.getOrCreate(req.params.date);
-  const updates: RecurringCompletionUpdate[] = Array.isArray(req.body.recurring) ? req.body.recurring : [];
-  recurringDao.updateCompletions(dayPlan.id, updates);
+  const updates: RecurringUpdate[] = Array.isArray(req.body.recurring) ? req.body.recurring : [];
+  const validUpdates = updates.filter((update) => typeof update.id === "string" && typeof update.isCompleted === "boolean");
+  const hasTimedFields = validUpdates.some(
+    (update) => typeof update.titleSnapshot === "string" || typeof update.startTimeHhmm === "string" || typeof update.endTimeHhmm === "string",
+  );
+  if (hasTimedFields) {
+    recurringDao.updateTimed(dayPlan.id, validUpdates);
+  } else {
+    recurringDao.updateCompletions(dayPlan.id, validUpdates);
+  }
   res.json({ ok: true });
 });
 
@@ -58,10 +100,16 @@ app.put("/api/day/:date/events", (req, res) => {
 
 app.post("/api/day/:date/generate-plan", (req, res) => {
   const dayPlan = dayPlanDao.getOrCreate(req.params.date);
-  const tasks = taskDao.listForDay(dayPlan.id);
-  const events = eventDao.listForDay(dayPlan.id);
-  const plan = generatePlan(req.params.date, tasks, events, dayPlan.id);
-  scheduleBlockDao.replacePlanned(dayPlan.id, plan.blocks);
+  const plannerWindow = parsePlannerWindow(req.body);
+  const plan = generateAndPersistDayPlan(req.params.date, dayPlan.id, plannerWindow);
+  res.json({ ok: true, ...plan });
+});
+
+app.post("/api/day/:date/reset-and-generate", (req, res) => {
+  const dayPlan = dayPlanDao.getOrCreate(req.params.date);
+  dayPlanDao.resetDayStateForRebuild(dayPlan.id);
+  const plannerWindow = parsePlannerWindow(req.body);
+  const plan = generateAndPersistDayPlan(req.params.date, dayPlan.id, plannerWindow);
   res.json({ ok: true, ...plan });
 });
 
@@ -167,5 +215,5 @@ app.put("/api/day/:date/timer-session", (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Morning Planner API running on http://localhost:${port}`);
+  console.log(`Pom Day API running on http://localhost:${port}`);
 });

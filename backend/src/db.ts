@@ -86,6 +86,7 @@ export function initDb(): void {
     db.exec(statement);
   }
   ensureSourceEventColumn();
+  ensureRecurringTimeColumns();
   seedRecurringTemplates();
 }
 
@@ -97,19 +98,46 @@ function ensureSourceEventColumn(): void {
   }
 }
 
+function ensureRecurringTimeColumns(): void {
+  const templateColumns = db.prepare("PRAGMA table_info(recurring_templates)").all() as Array<{ name: string }>;
+  const hasTemplateStart = templateColumns.some((column) => column.name === "start_time_hhmm");
+  const hasTemplateEnd = templateColumns.some((column) => column.name === "end_time_hhmm");
+  if (!hasTemplateStart) {
+    db.exec("ALTER TABLE recurring_templates ADD COLUMN start_time_hhmm TEXT");
+  }
+  if (!hasTemplateEnd) {
+    db.exec("ALTER TABLE recurring_templates ADD COLUMN end_time_hhmm TEXT");
+  }
+
+  const dailyColumns = db.prepare("PRAGMA table_info(daily_recurring_items)").all() as Array<{ name: string }>;
+  const hasDailyStart = dailyColumns.some((column) => column.name === "start_time_snapshot_hhmm");
+  const hasDailyEnd = dailyColumns.some((column) => column.name === "end_time_snapshot_hhmm");
+  if (!hasDailyStart) {
+    db.exec("ALTER TABLE daily_recurring_items ADD COLUMN start_time_snapshot_hhmm TEXT");
+  }
+  if (!hasDailyEnd) {
+    db.exec("ALTER TABLE daily_recurring_items ADD COLUMN end_time_snapshot_hhmm TEXT");
+  }
+}
+
 function seedRecurringTemplates(): void {
   const count = db.prepare("SELECT COUNT(*) as count FROM recurring_templates").get() as { count: number };
   if (count.count > 0) return;
 
   const now = new Date().toISOString();
-  const defaults = ["Inbox zero", "Read technical post", "Exercise", "Lunch"];
+  const defaults = [
+    { title: "Inbox zero", start: "07:00", end: "07:30" },
+    { title: "Read technical post", start: "07:30", end: "08:00" },
+    { title: "Exercise", start: "12:00", end: "12:30" },
+    { title: "Lunch", start: "12:30", end: "13:00" },
+  ];
   const stmt = db.prepare(
-    `INSERT INTO recurring_templates (id, title, sort_order, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?)`,
+    `INSERT INTO recurring_templates (id, title, start_time_hhmm, end_time_hhmm, sort_order, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
   const tx = db.transaction(() => {
-    defaults.forEach((title, idx) => {
-      stmt.run(crypto.randomUUID(), title, idx, now, now);
+    defaults.forEach((template, idx) => {
+      stmt.run(crypto.randomUUID(), template.title, template.start, template.end, idx, now, now);
     });
   });
   tx();

@@ -101,4 +101,38 @@ describe("generatePlan", () => {
     expect(breakStart).toBe(focusEnd);
     expect(breakEnd - breakStart).toBe(5 * 60_000);
   });
+
+  it("does not schedule focus sessions into timed recurring events", () => {
+    const tasks = [makeTask("a", "Deep work", 1)];
+    const fixedEvents: FixedEvent[] = [];
+    const recurringEvents: FixedEvent[] = [
+      {
+        id: "rec-1",
+        dayPlanId: "day-1",
+        title: "Morning routine",
+        startTimeIso: "2026-04-25T07:00:00",
+        endTimeIso: "2026-04-25T07:30:00",
+      },
+    ];
+
+    const result = generatePlan("2026-04-25", tasks, fixedEvents, "day-1", recurringEvents);
+    const focus = result.blocks.find((block) => block.blockType === "focus");
+    const recurring = result.blocks.find((block) => block.blockType === "recurring_event");
+    const recurringEnd = new Date(recurringEvents[0].endTimeIso).getTime();
+    const focusStart = new Date(focus?.startTimeIso ?? "").getTime();
+
+    expect(recurring?.label).toBe("Morning routine");
+    expect(focusStart).toBeGreaterThanOrEqual(recurringEnd);
+  });
+
+  it("respects a custom day planning window", () => {
+    const tasks = [makeTask("a", "Windowed work", 1)];
+    const fixedEvents: FixedEvent[] = [];
+    const result = generatePlan("2026-04-25", tasks, fixedEvents, "day-1", [], {
+      dayStartTimeHhmm: "10:00",
+      dayEndTimeHhmm: "12:00",
+    });
+    const focus = result.blocks.find((block) => block.blockType === "focus");
+    expect(focus?.startTimeIso).toBe(new Date("2026-04-25T10:00:00").toISOString());
+  });
 });

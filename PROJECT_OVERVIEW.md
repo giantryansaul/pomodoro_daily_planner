@@ -1,8 +1,8 @@
-# Morning Planner Web App
+# Pom Day Web App
 
 ## Purpose
 
-Morning Planner is a local-first web app for starting the day with a clear plan. It guides the user through a focused morning flow:
+Pom Day is a local-first web app for starting the day with a clear plan. It guides the user through a focused morning flow:
 
 1. Use a paused-by-default 10-minute planning timer to choose the day intentionally.
 2. Edit tasks, recurring items, and known calendar events on one planning page.

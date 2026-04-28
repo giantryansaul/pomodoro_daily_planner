@@ -63,6 +63,39 @@ body {
   margin-top: 1rem;
 }
 
+.day-boundary-controls {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+}
+
+.day-boundary-controls h2,
+.day-boundary-controls h3 {
+  margin: 0 0 0.6rem;
+  font-size: 1rem;
+}
+
+.day-boundary-fields {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.day-boundary-fields label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 700;
+  color: #334155;
+}
+
+.day-boundary-fields label span {
+  font-size: 0.85rem;
+  color: #475569;
+}
+
+.day-boundary-fields select {
+  min-width: 11rem;
+}
+
 .panel {
   background: white;
   border: 1px solid #dbe3ef;
@@ -238,12 +271,50 @@ ol {
 .timer-card {
   position: sticky;
   top: 1rem;
+  min-height: 402px;
+  border-width: 2px;
 }
 
-.timer-display {
-  font-size: 3rem;
-  font-weight: 700;
-  margin: 0.5rem 0 1rem;
+.timer-card-planning {
+  background: #fefce8;
+  border-color: #fde68a;
+}
+
+.timer-card-focus {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+
+.timer-card-break {
+  background: #eff6ff;
+  border-color: #1e3a8a;
+}
+
+.timer-card-fixed_event {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.timer-card-recurring_event {
+  background: #f3e8ff;
+  border-color: #c4b5fd;
+}
+
+.timer-card-empty {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.timer-card-label {
+  margin: 0;
+  color: #334155;
+}
+
+.timer-card-time {
+  margin: 0.4rem 0 0.8rem;
+  font-size: clamp(4rem, 10vw, 7rem);
+  font-weight: 900;
+  letter-spacing: -0.08em;
 }
 
 .warning {
@@ -327,10 +398,7 @@ ol {
 }
 
 .calendar-block-session {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 132px;
-  gap: 0.5rem;
-  padding: 0.45rem;
+  padding: 0.45rem 0.65rem;
 }
 
 .calendar-block-break {
@@ -347,6 +415,12 @@ ol {
   background: #e5e7eb;
   border-color: #cbd5e1;
   color: #334155;
+}
+
+.calendar-block-recurring {
+  background: #e9d5ff;
+  border-color: #c4b5fd;
+  color: #4c1d95;
 }
 
 .calendar-block.active {
@@ -381,7 +455,7 @@ ol {
 }
 
 .calendar-block-header {
-  justify-content: space-between;
+  justify-content: flex-start;
   min-width: 0;
 }
 
@@ -473,37 +547,10 @@ ol {
   padding: 0.25rem;
 }
 
-.active-timer {
-  position: sticky;
-  top: 1rem;
-  border-width: 2px;
-}
-
-.active-timer-focus {
-  background: #eff6ff;
-  border-color: #93c5fd;
-}
-
-.active-timer-break {
-  background: #eff6ff;
-  border-color: #1e3a8a;
-}
-
-.active-timer-fixed_event {
-  background: #f8fafc;
-  border-color: #cbd5e1;
-}
-
-.active-label {
-  margin: 0;
-  color: #334155;
-}
-
-.active-time {
-  margin: 0.4rem 0 0.8rem;
-  font-size: clamp(4rem, 10vw, 7rem);
-  font-weight: 900;
-  letter-spacing: -0.08em;
+.calendar-break-segment-inline {
+  margin-left: 0;
+  flex: 0 0 auto;
+  justify-content: flex-start;
 }
 
 .progress-track {
@@ -531,14 +578,18 @@ ol {
     grid-template-columns: 1fr;
   }
 
-  .timer-card,
-  .active-timer {
+  .timer-card {
     position: static;
   }
 
   .app-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .day-boundary-fields label,
+  .day-boundary-fields select {
+    width: 100%;
   }
 
   .add-card,

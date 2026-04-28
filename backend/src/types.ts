@@ -1,4 +1,4 @@
-export type BlockType = "focus" | "break" | "fixed_event";
+export type BlockType = "focus" | "break" | "fixed_event" | "recurring_event";
 export type BlockStatus = "planned" | "completed" | "skipped";
 export type TimerState = "idle" | "running" | "paused" | "completed";
 export type TaskStatus = "pending" | "completed";
@@ -26,8 +26,21 @@ export interface DailyRecurringItem {
   dayPlanId: string;
   recurringTemplateId: string;
   titleSnapshot: string;
+  startTimeSnapshotHhmm: string | null;
+  endTimeSnapshotHhmm: string | null;
   sortOrder: number;
   isCompleted: boolean;
+}
+
+export type RecurringEditScope = "today" | "template";
+
+export interface RecurringUpdate {
+  id: string;
+  isCompleted: boolean;
+  titleSnapshot?: string;
+  startTimeHhmm?: string;
+  endTimeHhmm?: string;
+  editScope?: RecurringEditScope;
 }
 
 export interface ScheduleBlock {
