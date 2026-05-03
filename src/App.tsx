@@ -1,4 +1,4 @@
-import { Check, Coffee, Minus, Pause, Pencil, Play, Plus, RotateCcw, Save, SkipForward, Trash2, X } from "lucide-react";
+import { Apple, Check, Coffee, Minus, Pause, Pencil, Play, Plus, RotateCcw, Save, SkipForward, Trash2, X } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { dayStore } from "./dayStore";
@@ -19,6 +19,7 @@ type RecurringItemTimed = {
   startTimeSnapshotHhmm: string | null;
   endTimeSnapshotHhmm: string | null;
   isCompleted: boolean;
+  sortOrder: number;
   editScope: "today" | "template";
 };
 type EventInput = { clientId: string; title: string; startTime: string; endTime: string };
@@ -64,6 +65,8 @@ const TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
   return `${String(hours).padStart(2, "0")}:${minutes}`;
 });
 const POMODORO_OPTIONS = [1, 2, 3, 4, 5, 6];
+const MIN_POMODORO = Math.min(...POMODORO_OPTIONS);
+const MAX_POMODORO = Math.max(...POMODORO_OPTIONS);
 
 function newClientId(): string {
   return crypto.randomUUID();
@@ -125,6 +128,40 @@ function formatTimer(seconds: number): string {
 
 function sortByStartTime<T extends { startTimeIso: string }>(items: T[]): T[] {
   return [...items].sort((a, b) => new Date(a.startTimeIso).getTime() - new Date(b.startTimeIso).getTime());
+}
+
+function pomodoroSessionContext(
+  ordered: Block[],
+  anchor: Block | undefined,
+): { title: string; current: number; total: number } | null {
+  if (!anchor) return null;
+  let focusBlock: Block | undefined;
+  if (anchor.blockType === "break") {
+    const breakIndex = ordered.findIndex((block) => block.id === anchor.id);
+    if (breakIndex === -1) return null;
+    for (let i = breakIndex - 1; i >= 0; i -= 1) {
+      const candidate = ordered[i];
+      if (candidate.blockType === "focus" && candidate.endTimeIso === anchor.startTimeIso) {
+        focusBlock = candidate;
+        break;
+      }
+    }
+  } else if (anchor.blockType === "focus") {
+    focusBlock = anchor;
+  } else {
+    return null;
+  }
+  if (!focusBlock) return null;
+  const { sourceTaskId, sourceDailyRecurringId } = focusBlock;
+  if (!sourceTaskId && !sourceDailyRecurringId) return null;
+  const focuses = ordered.filter(
+    (block) =>
+      block.blockType === "focus"
+      && (sourceTaskId ? block.sourceTaskId === sourceTaskId : block.sourceDailyRecurringId === sourceDailyRecurringId),
+  );
+  if (focuses.length === 0) return null;
+  const current = focuses.findIndex((block) => block.id === focusBlock!.id) + 1;
+  return { title: focusBlock.label, current, total: focuses.length };
 }
 
 function durationInSeconds(block?: Block): number {
@@ -320,6 +357,7 @@ function normalizeRecurring(items: Array<{
   startTimeSnapshotHhmm: string | null;
   endTimeSnapshotHhmm: string | null;
   isCompleted: boolean;
+  sortOrder: number;
 }>): RecurringItemTimed[] {
   return items.map((item) => ({
     ...item,
@@ -371,6 +409,15 @@ function App() {
     if (displayedBlock.blockType === "focus" && displayedBlock.sourceDailyRecurringId) return "recurring_focus";
     return displayedBlock.blockType;
   }, [displayedBlock]);
+  const pomodoroTimerLabel = useMemo(() => {
+    const ctx = pomodoroSessionContext(orderedTimeline, displayedBlock);
+    if (ctx) return `${ctx.title} ${ctx.current} of ${ctx.total}`;
+    return displayedBlock?.label ?? "No task ready";
+  }, [orderedTimeline, displayedBlock]);
+  const recurringRowsForTodayList = useMemo(
+    () => [...recurring].sort((a, b) => a.sortOrder - b.sortOrder),
+    [recurring],
+  );
   const displayedBlockDurationSeconds = durationInSeconds(displayedBlock);
   const displayedElapsedSeconds = activeBlock ? (timer?.elapsedSeconds ?? 0) : 0;
   const remainingSeconds = Math.max(displayedBlockDurationSeconds - displayedElapsedSeconds, 0);
@@ -811,6 +858,31 @@ function App() {
     setTimer(timerData.session);
   }
 
+  async function adjustTimelineTaskPomodoros(serverId: string, delta: number): Promise<void> {
+    const { ok } = await dayStore.adjustTaskEstimatedPomodoros(today, serverId, delta, {
+      dayStartTimeHhmm: dayStartTime,
+      dayEndTimeHhmm: dayEndTime,
+    });
+    if (!ok) return;
+    const [timelineData, timerData] = await Promise.all([dayStore.getTimeline(today), dayStore.getTimerSession(today)]);
+    setTimeline(sortByStartTime(timelineData.blocks));
+    setTimer(timerData.session);
+    await refreshTasksFromStore();
+  }
+
+  async function setTimelineRecurringCompletion(dailyRecurringRowId: string, completed: boolean): Promise<void> {
+    const { ok } = await dayStore.setRecurringCompletion(today, dailyRecurringRowId, completed);
+    if (!ok) return;
+    const [timelineData, recurringData, timerData] = await Promise.all([
+      dayStore.getTimeline(today),
+      dayStore.getRecurring(today),
+      dayStore.getTimerSession(today),
+    ]);
+    setTimeline(sortByStartTime(timelineData.blocks));
+    setRecurring(normalizeRecurring(recurringData.recurring));
+    setTimer(timerData.session);
+  }
+
   async function deleteRecurringTemplateForItem(templateId: string, title: string): Promise<void> {
     const confirmed = window.confirm(
       `Delete recurring template "${title}"? It is removed for future days and the timeline is regenerated when one exists.`,
@@ -1185,25 +1257,27 @@ function App() {
             </div>
           </div>
 
-          <TimerCard
-            title="Planning Timer"
-            variant="planning"
-            labelText="Planning session"
-            timeText={`${Math.floor(planningSecondsLeft / 60)}:${String(planningSecondsLeft % 60).padStart(2, "0")}`}
-            progressPercent={planningProgressPercent}
-            stateText={`State: ${planningState}`}
-            helperText="Use this 10-minute timer to time box your planning session."
-            actions={(
-              <>
-                <button onClick={togglePlanningTimer} aria-label={planningTimerRunning ? "Pause planning timer" : "Start planning timer"}>
-                  {planningTimerRunning ? <Pause size={18} aria-hidden="true" /> : <Play size={18} aria-hidden="true" />}
-                </button>
-                <button onClick={resetPlanningTimer} aria-label="Reset planning timer">
-                  <RotateCcw size={18} aria-hidden="true" />
-                </button>
-              </>
-            )}
-          />
+          <div className="editing-timer-rail">
+            <TimerCard
+              title="Planning Timer"
+              variant="planning"
+              labelText="Planning session"
+              timeText={`${Math.floor(planningSecondsLeft / 60)}:${String(planningSecondsLeft % 60).padStart(2, "0")}`}
+              progressPercent={planningProgressPercent}
+              stateText={`State: ${planningState}`}
+              helperText="Use this 10-minute timer to time box your planning session."
+              actions={(
+                <>
+                  <button onClick={togglePlanningTimer} aria-label={planningTimerRunning ? "Pause planning timer" : "Start planning timer"}>
+                    {planningTimerRunning ? <Pause size={18} aria-hidden="true" /> : <Play size={18} aria-hidden="true" />}
+                  </button>
+                  <button onClick={resetPlanningTimer} aria-label="Reset planning timer">
+                    <RotateCcw size={18} aria-hidden="true" />
+                  </button>
+                </>
+              )}
+            />
+          </div>
         </section>
       )}
 
@@ -1212,7 +1286,7 @@ function App() {
           <div className="timeline panel">
             <div className="section-heading">
               <h2>Timeline</h2>
-              <div className="row">
+              <div className="section-actions">
                 <button onClick={() => void resetDay()}>
                   <RotateCcw size={18} aria-hidden="true" />
                   <span>Reset Day</span>
@@ -1355,60 +1429,116 @@ function App() {
           </div>
 
           <div className="timeline-timer-column">
-            <TimerCard
-              title="Pomodoro Timer 🍎"
-              variant={pomodoroTimerVariant}
-              labelText={displayedBlock?.label ?? "No task ready"}
-              timeText={formatTimer(remainingSeconds)}
-              progressPercent={timerProgressPercent}
-              progressDanger={timerAlmostDone}
-              stateText={`State: ${timer?.state ?? "idle"}`}
-              helperText="Stay on this block until complete, then move to the next one."
-              actions={(
-                <>
-                  <button
-                    type="button"
-                    onClick={() => void startTimer()}
-                    disabled={!timer || timer.state === "running"}
-                    aria-label="Start timer"
-                  >
-                    <Play size={18} aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void togglePause()}
-                    disabled={!timer || timer.state !== "running"}
-                    aria-label="Pause timer"
-                  >
-                    <Pause size={18} aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void skipBlock()}
-                    disabled={!timer || !timer.activeBlockId}
-                    aria-label="Skip block"
-                  >
-                    <SkipForward size={18} aria-hidden="true" />
-                  </button>
-                </>
-              )}
-            />
-            <div className="panel timeline-task-list">
-              <h4>Today&apos;s tasks</h4>
-              <ul className="timeline-task-list-items">
-                {tasks
-                  .filter((task) => task.serverId)
-                  .map((task) => (
-                    <li key={task.serverId} className="timeline-task-list-row">
-                      <span className={task.status === "completed" ? "timeline-task-title is-completed" : "timeline-task-title"}>
-                        {task.title}
-                      </span>
+            <div className="timeline-timer-sticky">
+              <TimerCard
+                title="Pomodoro Timer 🍎"
+                variant={pomodoroTimerVariant}
+                labelText={pomodoroTimerLabel}
+                timeText={formatTimer(remainingSeconds)}
+                progressPercent={timerProgressPercent}
+                progressDanger={timerAlmostDone}
+                stateText={`State: ${timer?.state ?? "idle"}`}
+                helperText="Stay on this block until complete, then move to the next one."
+                actions={(
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void startTimer()}
+                      disabled={!timer || timer.state === "running"}
+                      aria-label="Start timer"
+                    >
+                      <Play size={18} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void togglePause()}
+                      disabled={!timer || timer.state !== "running"}
+                      aria-label="Pause timer"
+                    >
+                      <Pause size={18} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void skipBlock()}
+                      disabled={!timer || !timer.activeBlockId}
+                      aria-label="Skip block"
+                    >
+                      <SkipForward size={18} aria-hidden="true" />
+                    </button>
+                  </>
+                )}
+              />
+              <div className="panel timeline-task-list">
+                <h4>Today&apos;s tasks</h4>
+                <ul className="timeline-task-list-items">
+                  {tasks
+                    .filter((task) => task.serverId)
+                    .map((task) => {
+                      const pomos = task.estimatedPomodoros ?? 1;
+                      return (
+                        <li key={task.serverId} className="timeline-task-list-row">
+                          <div className="timeline-task-list-main">
+                            <span className={task.status === "completed" ? "timeline-task-title is-completed" : "timeline-task-title"}>
+                              {task.title}
+                            </span>
+                            <div className="timeline-task-pomodoro-row">
+                              <button
+                                type="button"
+                                disabled={pomos >= MAX_POMODORO}
+                                onClick={() => void adjustTimelineTaskPomodoros(task.serverId as string, 1)}
+                                aria-label="Add pomodoro"
+                                title="Add pomodoro"
+                              >
+                                <Plus size={14} aria-hidden="true" />
+                                <Apple size={14} aria-hidden="true" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={pomos <= MIN_POMODORO}
+                                onClick={() => void adjustTimelineTaskPomodoros(task.serverId as string, -1)}
+                                aria-label="Remove pomodoro"
+                                title="Remove pomodoro"
+                              >
+                                <Minus size={14} aria-hidden="true" />
+                                <Apple size={14} aria-hidden="true" />
+                              </button>
+                            </div>
+                          </div>
+                          <div className="timeline-task-actions">
+                            {task.status !== "completed" ? (
+                              <button
+                                type="button"
+                                className="timeline-task-complete"
+                                onClick={() => void setTimelineTaskCompletion(task.serverId as string, true)}
+                              >
+                                Complete
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="timeline-task-undo"
+                                onClick={() => void setTimelineTaskCompletion(task.serverId as string, false)}
+                              >
+                                Undo
+                              </button>
+                            )}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  {recurringRowsForTodayList.map((item) => (
+                    <li key={`recurring-${item.id}`} className="timeline-task-list-row">
+                      <div className="timeline-task-list-main">
+                        <span className={item.isCompleted ? "timeline-task-title is-completed" : "timeline-task-title"}>
+                          {item.titleSnapshot}
+                        </span>
+                      </div>
                       <div className="timeline-task-actions">
-                        {task.status !== "completed" ? (
+                        {!item.isCompleted ? (
                           <button
                             type="button"
                             className="timeline-task-complete"
-                            onClick={() => void setTimelineTaskCompletion(task.serverId as string, true)}
+                            onClick={() => void setTimelineRecurringCompletion(item.id, true)}
                           >
                             Complete
                           </button>
@@ -1416,7 +1546,7 @@ function App() {
                           <button
                             type="button"
                             className="timeline-task-undo"
-                            onClick={() => void setTimelineTaskCompletion(task.serverId as string, false)}
+                            onClick={() => void setTimelineRecurringCompletion(item.id, false)}
                           >
                             Undo
                           </button>
@@ -1424,7 +1554,8 @@ function App() {
                       </div>
                     </li>
                   ))}
-              </ul>
+                </ul>
+              </div>
             </div>
           </div>
         </section>

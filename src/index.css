@@ -1,4 +1,6 @@
 :root {
+  --schedule-rail-width: 360px;
+
   /* Focus + recurring: same cool family (blue → indigo). Events: warm, clearly separate. */
   --type-focus: #4f7ae8;
   --type-focus-deep: #2f5ac4;
@@ -140,7 +142,7 @@ body {
 
 .execution {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr) var(--schedule-rail-width);
   gap: 1rem;
   align-items: start;
 }
@@ -149,6 +151,23 @@ body {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  min-width: 0;
+}
+
+.timeline-timer-sticky {
+  position: sticky;
+  top: 1rem;
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.editing-timer-rail {
+  position: sticky;
+  top: 1rem;
+  align-self: start;
   min-width: 0;
 }
 
@@ -170,13 +189,32 @@ body {
 
 .timeline-task-list-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.45rem 0.55rem;
   border-radius: 10px;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
+}
+
+.timeline-task-list-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.timeline-task-pomodoro-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.timeline-task-pomodoro-row button {
+  padding: 0.25rem 0.45rem;
+  font-size: 0.75rem;
 }
 
 .timeline-task-title {
@@ -215,7 +253,7 @@ body {
 
 .editing-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) var(--schedule-rail-width);
   gap: 1rem;
   align-items: start;
 }
@@ -228,7 +266,7 @@ body {
 
 .section-heading {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 0.75rem;
@@ -236,6 +274,13 @@ body {
   border: 1px solid #a5f3fc;
   border-radius: 16px;
   background: #ecfeff;
+}
+
+.section-heading .section-actions {
+  margin-left: auto;
+  flex-direction: column;
+  align-items: flex-end;
+  flex-wrap: nowrap;
 }
 
 .planning-heading h2 {
@@ -387,8 +432,6 @@ ol {
 }
 
 .timer-card {
-  position: sticky;
-  top: 1rem;
   min-height: 402px;
   border-width: 2px;
 }
@@ -404,8 +447,19 @@ ol {
 }
 
 .timer-card-break {
-  background: #ede9fe;
-  border-color: var(--type-break);
+  background: var(--timeline-break-bg);
+  border-color: var(--timeline-break-border);
+  color: var(--timeline-break-ink);
+}
+
+.timer-card-break .timer-card-label,
+.timer-card-break .timer-card-label strong {
+  color: var(--timeline-break-ink);
+}
+
+.timer-card-break .muted {
+  color: var(--timeline-break-ink);
+  opacity: 0.9;
 }
 
 .timer-card-fixed_event {
@@ -767,7 +821,7 @@ ol {
 }
 
 .timer-card-break .progress-fill:not(.danger) {
-  background: var(--type-break);
+  background: var(--timeline-break-border);
 }
 
 .timer-card-fixed_event .progress-fill:not(.danger) {
@@ -796,7 +850,8 @@ ol {
     grid-template-columns: 1fr;
   }
 
-  .timer-card {
+  .timeline-timer-sticky,
+  .editing-timer-rail {
     position: static;
   }
 

@@ -408,7 +408,11 @@ export const dayStore = {
       return block;
     });
 
-    if (bundle.timerSession.activeBlockId && affectedBlockIds.has(bundle.timerSession.activeBlockId)) {
+    if (
+      completed
+      && bundle.timerSession.activeBlockId
+      && affectedBlockIds.has(bundle.timerSession.activeBlockId)
+    ) {
       bundle.timerSession = {
         ...bundle.timerSession,
         activeBlockId: null,
@@ -420,6 +424,79 @@ export const dayStore = {
     }
 
     writeDayBundle(bundle);
+    return { ok: true };
+  },
+
+  async setRecurringCompletion(dateIso: string, dailyRecurringId: string, completed: boolean): Promise<{ ok: boolean }> {
+    const bundle = loadOrCreateDayBundle(dateIso);
+    if (!bundle.dailyRecurring.some((item) => item.id === dailyRecurringId)) return { ok: false };
+
+    const affectedBlockIds = new Set(
+      bundle.timeline
+        .filter(
+          (block) =>
+            block.sourceDailyRecurringId === dailyRecurringId
+            && (block.blockType === "focus" || block.blockType === "break"),
+        )
+        .map((block) => block.id),
+    );
+
+    bundle.dailyRecurring = bundle.dailyRecurring.map((item) =>
+      item.id === dailyRecurringId ? { ...item, isCompleted: completed } : item,
+    );
+
+    bundle.timeline = bundle.timeline.map((block) => {
+      if (block.sourceDailyRecurringId !== dailyRecurringId || (block.blockType !== "focus" && block.blockType !== "break")) {
+        return block;
+      }
+      if (completed && block.status === "planned") {
+        return { ...block, status: "completed" as const };
+      }
+      if (!completed && block.status === "completed") {
+        return { ...block, status: "planned" as const };
+      }
+      return block;
+    });
+
+    if (
+      completed
+      && bundle.timerSession.activeBlockId
+      && affectedBlockIds.has(bundle.timerSession.activeBlockId)
+    ) {
+      bundle.timerSession = {
+        ...bundle.timerSession,
+        activeBlockId: null,
+        state: "idle",
+        elapsedSeconds: 0,
+        startedAt: null,
+        pausedAt: null,
+      };
+    }
+
+    writeDayBundle(bundle);
+    return { ok: true };
+  },
+
+  async adjustTaskEstimatedPomodoros(
+    dateIso: string,
+    taskId: string,
+    delta: number,
+    plannerWindow: PlannerWindowInput,
+  ): Promise<{ ok: boolean }> {
+    const bundle = loadOrCreateDayBundle(dateIso);
+    const task = bundle.tasks.find((entry) => entry.id === taskId);
+    if (!task) return { ok: false };
+
+    const current = Math.max(1, task.estimatedPomodoros ?? 1);
+    const next = Math.min(6, Math.max(1, current + delta));
+    if (next === current) {
+      return { ok: true };
+    }
+
+    bundle.tasks = bundle.tasks.map((entry) =>
+      entry.id === taskId ? { ...entry, estimatedPomodoros: next } : entry,
+    );
+    generateAndPersist(bundle, parsePlannerWindow(plannerWindow));
     return { ok: true };
   },
 
