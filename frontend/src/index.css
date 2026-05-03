@@ -1,4 +1,34 @@
 :root {
+  /* Focus + recurring: same cool family (blue → indigo). Events: warm, clearly separate. */
+  --type-focus: #4f7ae8;
+  --type-focus-deep: #2f5ac4;
+  --type-break: #9333ea;
+  --type-break-deep: #6b21a8;
+  /* Fixed calendar meetings — warm terracotta / peach (not orange clash with planning) */
+  --type-calendar: #d97757;
+  --type-calendar-deep: #b4532a;
+  /* Recurring: indigo-violet, reads as “related” to focus blue */
+  --type-recurring: #6d5ce8;
+  --type-recurring-deep: #4c3ad4;
+  --planning-accent: #f59e0b;
+
+  /* Timeline blocks: light fills + readable ink (timer column still uses --type-* above) */
+  --timeline-focus-bg: #dbeafe;
+  --timeline-focus-border: #7dd3fc;
+  --timeline-focus-ink: #0f172a;
+
+  --timeline-break-bg: #ede9fe;
+  --timeline-break-border: #c4b5fd;
+  --timeline-break-ink: #5b21b6;
+
+  --timeline-calendar-bg: #ffedd5;
+  --timeline-calendar-border: #fdba74;
+  --timeline-calendar-ink: #7c2d12;
+
+  --timeline-recurring-bg: #e8eaff;
+  --timeline-recurring-border: #a5b4fc;
+  --timeline-recurring-ink: #312e81;
+
   font-family: Inter, system-ui, -apple-system, Segoe UI, sans-serif;
   color: #0f172a;
   background: #eef2f7;
@@ -28,8 +58,8 @@ body {
   justify-content: space-between;
   gap: 1rem;
   padding: 1.25rem;
-  background: linear-gradient(135deg, #ffffff, #e0f2fe);
-  border: 1px solid #dbeafe;
+  background: #ecfeff;
+  border: 1px solid #7dd3fc;
   border-radius: 24px;
   box-shadow: 0 18px 48px rgb(15 23 42 / 10%);
 }
@@ -42,7 +72,7 @@ body {
 
 .eyebrow {
   margin: 0 0 0.25rem;
-  color: #2563eb;
+  color: var(--type-break-deep);
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -50,12 +80,12 @@ body {
 
 .weekday-badge {
   border-radius: 999px;
-  background: #1d4ed8;
+  background: var(--type-focus-deep);
   color: white;
   font-size: clamp(1rem, 2vw, 1.4rem);
   font-weight: 800;
   padding: 0.75rem 1.1rem;
-  box-shadow: 0 12px 30px rgb(37 99 235 / 25%);
+  box-shadow: 0 12px 28px rgb(37 99 235 / 28%);
 }
 
 .editing-layout,
@@ -135,9 +165,9 @@ body {
   gap: 1rem;
   margin-bottom: 0.75rem;
   padding: 0.9rem 1rem;
-  border: 1px solid #dbeafe;
+  border: 1px solid #a5f3fc;
   border-radius: 16px;
-  background: linear-gradient(135deg, #ffffff, #e0f2fe);
+  background: #ecfeff;
 }
 
 .planning-heading h2 {
@@ -190,8 +220,8 @@ button {
 }
 
 button:hover:not(:disabled) {
-  background: #e0f2fe;
-  border-color: #93c5fd;
+  background: #cffafe;
+  border-color: var(--type-focus);
   transform: translateY(-1px);
 }
 
@@ -253,7 +283,7 @@ ol {
   display: inline-flex;
   gap: 0.25rem;
   padding: 0.25rem;
-  background: #e2e8f0;
+  background: #ccfbf1;
   border-radius: 999px;
 }
 
@@ -279,7 +309,7 @@ ol {
 }
 
 .pomodoro-picker input:checked + span {
-  background: #2563eb;
+  background: var(--type-focus-deep);
   color: white;
 }
 
@@ -296,33 +326,33 @@ ol {
 }
 
 .timer-card-planning {
-  background: #fefce8;
-  border-color: #fde68a;
+  background: #fef3c7;
+  border-color: var(--planning-accent);
 }
 
 .timer-card-focus {
-  background: #eff6ff;
-  border-color: #93c5fd;
+  background: #e8efff;
+  border-color: var(--type-focus-deep);
 }
 
 .timer-card-break {
-  background: #eff6ff;
-  border-color: #1e3a8a;
+  background: #ede9fe;
+  border-color: var(--type-break);
 }
 
 .timer-card-fixed_event {
-  background: #f8fafc;
-  border-color: #cbd5e1;
+  background: #fdf4ef;
+  border-color: var(--type-calendar-deep);
 }
 
 .timer-card-recurring_event {
-  background: #f3e8ff;
-  border-color: #c4b5fd;
+  background: #eeebff;
+  border-color: var(--type-recurring-deep);
 }
 
 .timer-card-empty {
-  background: #f8fafc;
-  border-color: #cbd5e1;
+  background: #f1f5f9;
+  border-color: #94a3b8;
 }
 
 .timer-card-label {
@@ -375,7 +405,7 @@ ol {
 .calendar-grid {
   overflow: visible;
   background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  border: 1px solid #cbd5e1;
   border-radius: 18px;
 }
 
@@ -401,9 +431,11 @@ ol {
   right: 0.75rem;
   display: flex;
   flex-direction: column;
+  justify-content: center;
+  align-items: stretch;
   gap: 0.25rem;
   min-height: 34px;
-  padding: 0.55rem 0.65rem;
+  padding: 0.35rem 0.65rem;
   overflow: hidden;
   border: 1px solid transparent;
   border-radius: 14px;
@@ -412,35 +444,39 @@ ol {
 }
 
 .calendar-block-focus {
-  background: #dbeafe;
-  border-color: #93c5fd;
-  color: #1e3a8a;
+  background: var(--timeline-focus-bg);
+  border-color: var(--timeline-focus-border);
+  color: var(--timeline-focus-ink);
+  box-shadow: 0 4px 14px rgb(59 130 246 / 14%);
 }
 
 .calendar-block-session {
-  padding: 0.45rem 0.65rem;
+  padding: 0.35rem 0.65rem;
 }
 
 .calendar-block-break {
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  background: #1e3a8a;
-  border-color: #1d4ed8;
-  color: white;
-  padding-block: 0.25rem;
+  background: var(--timeline-break-bg);
+  border-color: var(--timeline-break-border);
+  color: var(--timeline-break-ink);
+  padding-block: 0.35rem;
+  box-shadow: 0 4px 14px rgb(139 92 246 / 14%);
 }
 
 .calendar-block-event {
-  background: #e5e7eb;
-  border-color: #cbd5e1;
-  color: #334155;
+  background: var(--timeline-calendar-bg);
+  border-color: var(--timeline-calendar-border);
+  color: var(--timeline-calendar-ink);
+  box-shadow: 0 4px 14px rgb(251 146 60 / 14%);
 }
 
 .calendar-block-recurring {
-  background: #e9d5ff;
-  border-color: #c4b5fd;
-  color: #4c1d95;
+  background: var(--timeline-recurring-bg);
+  border-color: var(--timeline-recurring-border);
+  color: var(--timeline-recurring-ink);
+  box-shadow: 0 4px 14px rgb(99 102 241 / 14%);
 }
 
 .calendar-block.active {
@@ -453,6 +489,9 @@ ol {
   min-height: 110px;
   overflow: visible;
   z-index: 20;
+  justify-content: flex-start;
+  padding-top: 0.4rem;
+  padding-bottom: 5.25rem;
 }
 
 .calendar-block.completed {
@@ -495,6 +534,26 @@ ol {
   white-space: nowrap;
 }
 
+.calendar-block-focus .calendar-title-row strong,
+.calendar-block-focus .calendar-title-row span {
+  color: var(--timeline-focus-ink);
+}
+
+.calendar-block-break .calendar-title-row strong,
+.calendar-block-break .calendar-title-row span {
+  color: var(--timeline-break-ink);
+}
+
+.calendar-block-event .calendar-title-row strong,
+.calendar-block-event .calendar-title-row span {
+  color: var(--timeline-calendar-ink);
+}
+
+.calendar-block-recurring .calendar-title-row strong,
+.calendar-block-recurring .calendar-title-row span {
+  color: var(--timeline-recurring-ink);
+}
+
 .calendar-actions {
   flex: 0 0 auto;
   margin-left: auto;
@@ -535,7 +594,12 @@ ol {
 }
 
 .calendar-block-main {
+  position: relative;
   min-width: 0;
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .calendar-break-segment {
@@ -545,14 +609,16 @@ ol {
   gap: 0.35rem;
   min-width: 0;
   padding: 0.35rem;
-  color: white;
-  background: #1e3a8a;
+  color: var(--timeline-break-ink);
+  background: var(--timeline-break-bg);
+  border: 1px solid var(--timeline-break-border);
   border-radius: 10px;
 }
 
 .calendar-break-segment span {
   font-size: 0.72rem;
   font-weight: 900;
+  color: var(--timeline-break-ink);
 }
 
 .calendar-break-segment .calendar-actions {
@@ -565,6 +631,14 @@ ol {
   min-width: 1.7rem;
   min-height: 1.7rem;
   padding: 0.25rem;
+  background: #fff;
+  color: var(--timeline-break-ink);
+  border: 1px solid var(--timeline-break-border);
+}
+
+.calendar-break-segment button:hover:not(:disabled) {
+  background: var(--timeline-break-bg);
+  border-color: var(--timeline-break-ink);
 }
 
 .calendar-break-segment-inline {
@@ -577,15 +651,39 @@ ol {
   width: 100%;
   height: 1.1rem;
   overflow: hidden;
-  background: #dbe3ef;
+  background: #e2e8f0;
   border-radius: 999px;
 }
 
 .progress-fill {
   height: 100%;
-  background: #2563eb;
+  background: var(--type-focus);
   border-radius: inherit;
   transition: width 300ms ease, background 200ms ease;
+}
+
+.timer-card-planning .progress-fill:not(.danger) {
+  background: var(--planning-accent);
+}
+
+.timer-card-focus .progress-fill:not(.danger) {
+  background: var(--type-focus);
+}
+
+.timer-card-break .progress-fill:not(.danger) {
+  background: var(--type-break);
+}
+
+.timer-card-fixed_event .progress-fill:not(.danger) {
+  background: var(--type-calendar-deep);
+}
+
+.timer-card-recurring_event .progress-fill:not(.danger) {
+  background: var(--type-recurring);
+}
+
+.timer-card-empty .progress-fill:not(.danger) {
+  background: #64748b;
 }
 
 .progress-fill.danger {

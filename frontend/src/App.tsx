@@ -66,6 +66,8 @@ const DEFAULT_DAY_END_TIME = "19:00";
 const DEFAULT_RECURRING_START_TIME = "07:00";
 const DEFAULT_RECURRING_END_TIME = "07:30";
 const HOUR_HEIGHT_PX = 96;
+/** Vertical breathing room between stacked calendar blocks (px), converted using grid height. */
+const CALENDAR_VERTICAL_GAP_PX = 5;
 const TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
   const hours = Math.floor(index / 2);
   const minutes = index % 2 === 0 ? "00" : "30";
@@ -825,12 +827,18 @@ function App() {
   }
 
   function calendarItemStyle(item: CalendarItem): CSSProperties {
+    const gridHeightPx = (calendarBounds.totalMinutes / 60) * HOUR_HEIGHT_PX;
     const itemEndIso = item.breakBlock?.endTimeIso ?? item.block.endTimeIso;
     const startMinute = minutesFromDayStart(item.block.startTimeIso) - calendarBounds.startHour * 60;
     const durationMinutes = Math.max(5, (new Date(itemEndIso).getTime() - new Date(item.block.startTimeIso).getTime()) / 60_000);
+    const y0 = (startMinute / calendarBounds.totalMinutes) * gridHeightPx;
+    const y1 = ((startMinute + durationMinutes) / calendarBounds.totalMinutes) * gridHeightPx;
+    const gap = CALENDAR_VERTICAL_GAP_PX;
+    const topPx = y0 + gap / 2;
+    const heightPx = Math.max(y1 - y0 - gap, 10);
     const baseStyle: CSSProperties = {
-      top: `${(startMinute / calendarBounds.totalMinutes) * 100}%`,
-      height: `${(durationMinutes / calendarBounds.totalMinutes) * 100}%`,
+      top: `${(topPx / gridHeightPx) * 100}%`,
+      height: `${(heightPx / gridHeightPx) * 100}%`,
     };
     if (item.kind !== "fixed_event" || item.laneCount === 1) return baseStyle;
 
@@ -853,7 +861,7 @@ function App() {
     <main className="app">
       <header className="app-header">
         <div>
-          <p className="eyebrow">Pom Day</p>
+          <p className="eyebrow">Day Planner</p>
           <h1>{dateParts.dateText}</h1>
         </div>
         <div className="weekday-badge">{dateParts.weekday}</div>
