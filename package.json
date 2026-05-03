@@ -2,16 +2,14 @@
   "name": "productivity_app",
   "private": true,
   "version": "0.1.0",
-  "description": "Morning planner web app",
-  "workspaces": [
-    "frontend",
-    "backend"
-  ],
+  "description": "Pom Day morning planner web app (frontend-only, localStorage-backed)",
+  "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm run dev --workspace frontend\" \"npm run dev --workspace backend\"",
-    "build": "npm run build --workspace frontend && npm run build --workspace backend",
-    "lint": "npm run lint --workspace frontend && npm run lint --workspace backend",
-    "test": "npm run test --workspace backend"
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "keywords": [
     "productivity",
@@ -19,7 +17,25 @@
   ],
   "author": "",
   "license": "MIT",
+  "dependencies": {
+    "lucide-react": "^1.11.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
+  },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "@eslint/js": "^9.25.1",
+    "@types/node": "^22.15.29",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@vitejs/plugin-react": "^4.4.1",
+    "eslint": "^9.25.1",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.19",
+    "globals": "^16.0.0",
+    "react-refresh": "^0.17.0",
+    "typescript": "~5.8.3",
+    "typescript-eslint": "^8.30.1",
+    "vite": "^5.4.19",
+    "vitest": "^3.2.4"
   }
 }

@@ -1,4 +1,4 @@
-import type { BlockType, FixedEvent, PlannerResult, ScheduleBlock, Task, UnscheduledTask } from "./types.js";
+import type { FixedEvent, PlannerResult, ScheduleBlock, Task, UnscheduledTask } from "./types";
 
 const FOCUS_MINUTES = 25;
 const BREAK_MINUTES = 5;
@@ -78,6 +78,7 @@ function addFixedEventBlocks(fixedEvents: FixedEvent[], dayPlanId: string, block
         id: crypto.randomUUID(),
         dayPlanId,
         sourceTaskId: null,
+        sourceDailyRecurringId: null,
         sourceEventId: event.id,
         blockType: "fixed_event",
         label: event.title,
@@ -89,22 +90,45 @@ function addFixedEventBlocks(fixedEvents: FixedEvent[], dayPlanId: string, block
     });
 }
 
-function addRecurringBlocks(recurring: FixedEvent[], dayPlanId: string, blocks: ScheduleBlock[]): void {
+/** Full 25+5 pomodoro pairs inside each recurring window; remainder shorter than one session is omitted. */
+function addRecurringFocusBreakSessions(recurring: FixedEvent[], dayPlanId: string, blocks: ScheduleBlock[]): void {
   recurring
     .sort((a, b) => timeValue(a.startTimeIso) - timeValue(b.startTimeIso))
     .forEach((item) => {
-      blocks.push({
-        id: crypto.randomUUID(),
-        dayPlanId,
-        sourceTaskId: null,
-        sourceEventId: null,
-        blockType: "recurring_event" as BlockType,
-        label: item.title,
-        startTimeIso: item.startTimeIso,
-        endTimeIso: item.endTimeIso,
-        sequenceIndex: blocks.length + 1,
-        status: "planned",
-      });
+      const dailyRecurringId = item.id;
+      let cursor = new Date(item.startTimeIso);
+      const slotEnd = new Date(item.endTimeIso);
+      while (cursor.getTime() + FOCUS_SESSION_MINUTES * 60_000 <= slotEnd.getTime()) {
+        const focusEnd = addMinutes(cursor, FOCUS_MINUTES);
+        const breakEnd = addMinutes(focusEnd, BREAK_MINUTES);
+        blocks.push({
+          id: crypto.randomUUID(),
+          dayPlanId,
+          sourceTaskId: null,
+          sourceDailyRecurringId: dailyRecurringId,
+          sourceEventId: null,
+          blockType: "focus",
+          label: item.title,
+          startTimeIso: cursor.toISOString(),
+          endTimeIso: focusEnd.toISOString(),
+          sequenceIndex: blocks.length + 1,
+          status: "planned",
+        });
+        blocks.push({
+          id: crypto.randomUUID(),
+          dayPlanId,
+          sourceTaskId: null,
+          sourceDailyRecurringId: null,
+          sourceEventId: null,
+          blockType: "break",
+          label: "Break",
+          startTimeIso: focusEnd.toISOString(),
+          endTimeIso: breakEnd.toISOString(),
+          sequenceIndex: blocks.length + 1,
+          status: "planned",
+        });
+        cursor = breakEnd;
+      }
     });
 }
 
@@ -131,6 +155,7 @@ function scheduleFocusAndBreak(
     id: crypto.randomUUID(),
     dayPlanId,
     sourceTaskId: session.taskId,
+    sourceDailyRecurringId: null,
     sourceEventId: null,
     blockType: "focus",
     label: session.title,
@@ -145,6 +170,7 @@ function scheduleFocusAndBreak(
     id: crypto.randomUUID(),
     dayPlanId,
     sourceTaskId: null,
+    sourceDailyRecurringId: null,
     sourceEventId: null,
     blockType: "break",
     label: "Break",
@@ -179,7 +205,7 @@ export function generatePlan(
   const taskSessions = expandSessions(tasks);
 
   addFixedEventBlocks(fixedEvents, dayPlanId, plannedBlocks);
-  addRecurringBlocks(recurringBlocks, dayPlanId, plannedBlocks);
+  addRecurringFocusBreakSessions(recurringBlocks, dayPlanId, plannedBlocks);
 
   for (const session of taskSessions) {
     scheduleFocusAndBreak(session, freeWindows, dayPlanId, plannedBlocks, unscheduledTasks);

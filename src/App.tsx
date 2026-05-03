@@ -1,9 +1,17 @@
-import { Check, Coffee, Minus, Pause, Pencil, Play, Plus, RotateCcw, Save, SkipForward, X } from "lucide-react";
+import { Check, Coffee, Minus, Pause, Pencil, Play, Plus, RotateCcw, Save, SkipForward, Trash2, X } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { dayStore } from "./dayStore";
+import type { DayBoundaryDefaults, ScheduleBlock as Block, TaskStatus, TimerSession } from "./types";
 
 type AppMode = "editing" | "timeline";
-type TaskInput = { clientId: string; title: string; estimatedPomodoros?: number };
+type TaskInput = {
+  clientId: string;
+  serverId?: string;
+  title: string;
+  estimatedPomodoros?: number;
+  status?: TaskStatus;
+};
 type RecurringItemTimed = {
   id: string;
   recurringTemplateId: string;
@@ -14,24 +22,7 @@ type RecurringItemTimed = {
   editScope: "today" | "template";
 };
 type EventInput = { clientId: string; title: string; startTime: string; endTime: string };
-type DayBoundaryDefaults = { dayStartTimeHhmm: string; dayEndTimeHhmm: string };
 type RecurringDraft = { title: string; startTime: string; endTime: string };
-type Block = {
-  id: string;
-  blockType: "focus" | "break" | "fixed_event" | "recurring_event";
-  sourceTaskId: string | null;
-  sourceEventId: string | null;
-  label: string;
-  startTimeIso: string;
-  endTimeIso: string;
-  status: "planned" | "completed" | "skipped";
-};
-type TimerSession = {
-  id: string;
-  activeBlockId: string | null;
-  state: "idle" | "running" | "paused" | "completed";
-  elapsedSeconds: number;
-};
 type CalendarItem = {
   id: string;
   block: Block;
@@ -45,7 +36,7 @@ type TimelineEditDraft = {
   startTime: string;
   endTime: string;
 };
-type TimerCardVariant = "planning" | Block["blockType"] | "empty";
+type TimerCardVariant = "planning" | Block["blockType"] | "empty" | "recurring_focus";
 type TimerCardProps = {
   title: string;
   variant: TimerCardVariant;
@@ -58,7 +49,6 @@ type TimerCardProps = {
   actions: ReactNode;
 };
 
-const API = "http://localhost:3001/api";
 const today = new Date().toISOString().slice(0, 10);
 const PLANNING_TIMER_SECONDS = 10 * 60;
 const DEFAULT_DAY_START_TIME = "07:00";
@@ -165,10 +155,16 @@ function addMinutesIso(iso: string, minutes: number): string {
 }
 
 function blockClass(block: Block): string {
-  const blockTypeClass =
-    block.blockType === "fixed_event" ? "calendar-block-event"
-      : block.blockType === "recurring_event" ? "calendar-block-recurring"
-        : `calendar-block-${block.blockType}`;
+  let blockTypeClass: string;
+  if (block.blockType === "fixed_event") {
+    blockTypeClass = "calendar-block-event";
+  } else if (block.blockType === "recurring_event") {
+    blockTypeClass = "calendar-block-recurring";
+  } else if (block.blockType === "focus" && block.sourceDailyRecurringId) {
+    blockTypeClass = "calendar-block-recurring-focus";
+  } else {
+    blockTypeClass = `calendar-block-${block.blockType}`;
+  }
   return `calendar-block ${blockTypeClass}${block.status === "completed" ? " completed" : ""}`;
 }
 
@@ -358,6 +354,7 @@ function App() {
   const [timelineEditDraft, setTimelineEditDraft] = useState<TimelineEditDraft>({ label: "", startTime: "", endTime: "" });
   const [unscheduledCount, setUnscheduledCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [nowTick, setNowTick] = useState(() => Date.now());
 
   const orderedTimeline = useMemo(() => sortByStartTime(timeline), [timeline]);
   const firstRunnableBlock = useMemo(
@@ -369,6 +366,11 @@ function App() {
     [orderedTimeline, timer?.activeBlockId],
   );
   const displayedBlock = activeBlock ?? firstRunnableBlock;
+  const pomodoroTimerVariant = useMemo((): TimerCardVariant => {
+    if (!displayedBlock) return "empty";
+    if (displayedBlock.blockType === "focus" && displayedBlock.sourceDailyRecurringId) return "recurring_focus";
+    return displayedBlock.blockType;
+  }, [displayedBlock]);
   const displayedBlockDurationSeconds = durationInSeconds(displayedBlock);
   const displayedElapsedSeconds = activeBlock ? (timer?.elapsedSeconds ?? 0) : 0;
   const remainingSeconds = Math.max(displayedBlockDurationSeconds - displayedElapsedSeconds, 0);
@@ -381,8 +383,6 @@ function App() {
   const timerProgressPercent =
     displayedBlockDurationSeconds > 0 ? Math.min((displayedElapsedSeconds / displayedBlockDurationSeconds) * 100, 100) : 0;
   const timerAlmostDone = displayedBlockDurationSeconds > 0 && remainingSeconds <= displayedBlockDurationSeconds * 0.2;
-  const hasActiveBlock = Boolean(timer?.activeBlockId);
-  const timerIsRunningWithBlock = timer?.state === "running" && hasActiveBlock;
   const dateParts = useMemo(() => formatDateParts(today), []);
   const dayEndOptions = useMemo(
     () => TIME_OPTIONS.filter((time) => parseHhmmToMinutes(time) > parseHhmmToMinutes(dayStartTime)),
@@ -439,30 +439,27 @@ function App() {
   }, [planningTimerRunning]);
 
   const loadDay = useCallback(async (): Promise<void> => {
-    const [tasksRes, recurringRes, eventsRes, timelineRes, timerRes, defaultsRes] = await Promise.all([
-      fetch(`${API}/day/${today}/tasks`),
-      fetch(`${API}/day/${today}/recurring`),
-      fetch(`${API}/day/${today}/events`),
-      fetch(`${API}/day/${today}/timeline`),
-      fetch(`${API}/day/${today}/timer-session`),
-      fetch(`${API}/defaults/day-boundaries`),
+    const [tasksData, recurringData, eventsData, timelineData, timerData, defaultsData] = await Promise.all([
+      dayStore.getTasks(today),
+      dayStore.getRecurring(today),
+      dayStore.getEvents(today),
+      dayStore.getTimeline(today),
+      dayStore.getTimerSession(today),
+      dayStore.getDayBoundaryDefaults(),
     ]);
 
-    const tasksData = await tasksRes.json();
-    const recurringData = await recurringRes.json();
-    const eventsData = await eventsRes.json();
-    const timelineData = (await timelineRes.json()) as { blocks: Block[] };
-    const timerData = await timerRes.json();
-    const defaultsData = (await defaultsRes.json()) as DayBoundaryDefaults;
-
-    setTasks(tasksData.tasks.map((task: { title: string; estimatedPomodoros: number | null }) => ({
-      clientId: newClientId(),
-      title: task.title,
-      estimatedPomodoros: task.estimatedPomodoros ?? undefined,
-    })));
+    setTasks(
+      tasksData.tasks.map((task) => ({
+        clientId: newClientId(),
+        serverId: task.id,
+        title: task.title,
+        estimatedPomodoros: task.estimatedPomodoros ?? undefined,
+        status: task.status,
+      })),
+    );
     setRecurring(normalizeRecurring(recurringData.recurring));
     setEvents(
-      eventsData.events.map((event: { title: string; startTimeIso: string; endTimeIso: string }) => ({
+      eventsData.events.map((event) => ({
         clientId: newClientId(),
         title: event.title,
         startTime: event.startTimeIso.slice(11, 16),
@@ -482,12 +479,40 @@ function App() {
     void loadDay();
   }, [loadDay]);
 
-  async function persistDayBoundaryDefaults(next: DayBoundaryDefaults): Promise<void> {
-    await fetch(`${API}/defaults/day-boundaries`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(next),
+  useEffect(() => {
+    const id = window.setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const refreshTasksFromStore = useCallback(async (): Promise<void> => {
+    const tasksData = await dayStore.getTasks(today);
+    setTasks((prev) => {
+      const clientIdByServerId = new Map(
+        prev.filter((task) => task.serverId).map((task) => [task.serverId as string, task.clientId]),
+      );
+      return tasksData.tasks.map((task) => ({
+        clientId: clientIdByServerId.get(task.id) ?? newClientId(),
+        serverId: task.id,
+        title: task.title,
+        estimatedPomodoros: task.estimatedPomodoros ?? undefined,
+        status: task.status,
+      }));
     });
+  }, []);
+
+  const calendarNowLineStyle = useMemo((): CSSProperties | null => {
+    const now = new Date(nowTick);
+    const minutesFromMidnight = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+    const rangeStartMin = calendarBounds.startHour * 60;
+    const rangeEndMin = calendarBounds.endHour * 60;
+    if (minutesFromMidnight < rangeStartMin || minutesFromMidnight > rangeEndMin) return null;
+    const offsetMin = minutesFromMidnight - rangeStartMin;
+    const topPct = (offsetMin / calendarBounds.totalMinutes) * 100;
+    return { top: `${topPct}%` };
+  }, [calendarBounds.endHour, calendarBounds.startHour, calendarBounds.totalMinutes, nowTick]);
+
+  async function persistDayBoundaryDefaults(next: DayBoundaryDefaults): Promise<void> {
+    await dayStore.setDayBoundaryDefaults(next);
   }
 
   function handleDayStartTimeChange(nextStartTime: string): void {
@@ -505,74 +530,62 @@ function App() {
   }
 
   async function saveDay(): Promise<void> {
-    await fetch(`${API}/day/${today}/tasks`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        tasks: tasks.map(({ title, estimatedPomodoros }) => ({ title, estimatedPomodoros })),
-      }),
-    });
+    await dayStore.replaceTasks(today, tasks.map(({ title, estimatedPomodoros }) => ({ title, estimatedPomodoros })));
 
-    await fetch(`${API}/day/${today}/recurring`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        recurring: recurring.map((item) => ({
-          id: item.id,
-          isCompleted: item.isCompleted,
-          titleSnapshot: item.titleSnapshot,
-          startTimeHhmm: item.startTimeSnapshotHhmm,
-          endTimeHhmm: item.endTimeSnapshotHhmm,
-          editScope: item.editScope,
-        })),
-      }),
-    });
+    await dayStore.updateRecurring(
+      today,
+      recurring.map((item) => ({
+        id: item.id,
+        isCompleted: item.isCompleted,
+        titleSnapshot: item.titleSnapshot,
+        startTimeHhmm: item.startTimeSnapshotHhmm ?? undefined,
+        endTimeHhmm: item.endTimeSnapshotHhmm ?? undefined,
+        editScope: item.editScope,
+      })),
+    );
 
-    await fetch(`${API}/day/${today}/events`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        events: events.map((event) => ({
-          title: event.title,
-          startTimeIso: `${today}T${event.startTime}:00`,
-          endTimeIso: `${today}T${event.endTime}:00`,
-        })),
-      }),
-    });
+    await dayStore.replaceEvents(
+      today,
+      events.map((event) => ({
+        title: event.title,
+        startTimeIso: `${today}T${event.startTime}:00`,
+        endTimeIso: `${today}T${event.endTime}:00`,
+      })),
+    );
 
-    const planRes = await fetch(`${API}/day/${today}/generate-plan`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dayStartTimeHhmm: dayStartTime, dayEndTimeHhmm: dayEndTime }),
-    });
-    const planData = await planRes.json();
+    const planData = await dayStore.generatePlan(today, { dayStartTimeHhmm: dayStartTime, dayEndTimeHhmm: dayEndTime });
     setUnscheduledCount(planData.unscheduledTasks.length);
-    const timelineRes = await fetch(`${API}/day/${today}/timeline`);
-    const timelineData = (await timelineRes.json()) as { blocks: Block[] };
+    const [timelineData, tasksAfterSave] = await Promise.all([dayStore.getTimeline(today), dayStore.getTasks(today)]);
     const regeneratedTimeline = sortByStartTime(timelineData.blocks);
     setTimeline(regeneratedTimeline);
+    setTasks(
+      tasksAfterSave.tasks.map((task) => ({
+        clientId: newClientId(),
+        serverId: task.id,
+        title: task.title,
+        estimatedPomodoros: task.estimatedPomodoros ?? undefined,
+        status: task.status,
+      })),
+    );
     setMode("timeline");
   }
 
   async function runDayRebuild(endpoint: "generate-plan" | "reset-and-generate"): Promise<void> {
-    const planRes = await fetch(`${API}/day/${today}/${endpoint}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dayStartTimeHhmm: dayStartTime, dayEndTimeHhmm: dayEndTime }),
-    });
-    const planData = await planRes.json();
+    const plannerWindow = { dayStartTimeHhmm: dayStartTime, dayEndTimeHhmm: dayEndTime };
+    const planData =
+      endpoint === "reset-and-generate"
+        ? await dayStore.resetAndGenerate(today, plannerWindow)
+        : await dayStore.generatePlan(today, plannerWindow);
     setUnscheduledCount(planData.unscheduledTasks.length);
-    const [timelineRes, recurringRes, timerRes] = await Promise.all([
-      fetch(`${API}/day/${today}/timeline`),
-      fetch(`${API}/day/${today}/recurring`),
-      fetch(`${API}/day/${today}/timer-session`),
+    const [timelineData, recurringData, timerData] = await Promise.all([
+      dayStore.getTimeline(today),
+      dayStore.getRecurring(today),
+      dayStore.getTimerSession(today),
     ]);
-    const timelineData = (await timelineRes.json()) as { blocks: Block[] };
-    const recurringData = await recurringRes.json();
-    const timerData = await timerRes.json();
     setTimeline(sortByStartTime(timelineData.blocks));
     setRecurring(normalizeRecurring(recurringData.recurring));
     setTimer(timerData.session);
+    await refreshTasksFromStore();
     setEditingTimelineBlockId(null);
     setMode("timeline");
   }
@@ -590,8 +603,7 @@ function App() {
   async function clearDay(): Promise<void> {
     const confirmed = window.confirm("Clear today's tasks and events, and reset recurring tasks to defaults?");
     if (!confirmed) return;
-    const clearRes = await fetch(`${API}/day/${today}/clear`, { method: "POST" });
-    const clearData = await clearRes.json();
+    const clearData = await dayStore.clearDay(today);
     setTasks([]);
     setEvents([]);
     setTimeline([]);
@@ -603,17 +615,40 @@ function App() {
   }
 
   async function persistTimer(next: TimerSession): Promise<void> {
-    await fetch(`${API}/day/${today}/timer-session`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session: next }),
-    });
+    await dayStore.upsertTimerSession(today, next);
   }
 
   async function startTimer(): Promise<void> {
-    const firstBlock = orderedTimeline.find((block) => block.blockType !== "fixed_event" && block.status !== "completed");
-    if (!firstBlock || !timer) return;
-    const next = { ...timer, activeBlockId: firstBlock.id, state: "running" as const, elapsedSeconds: 0 };
+    if (!timer) return;
+    if (timer.state === "paused" && timer.activeBlockId) {
+      const next = { ...timer, state: "running" as const };
+      setTimer(next);
+      await persistTimer(next);
+      return;
+    }
+    if (timer.state === "running") return;
+
+    const fromCalendar = timer.activeBlockId
+      ? orderedTimeline.find(
+          (block) =>
+            block.id === timer.activeBlockId
+            && block.blockType !== "fixed_event"
+            && block.status !== "completed",
+        )
+      : undefined;
+    const targetBlock =
+      fromCalendar
+      ?? orderedTimeline.find((block) => block.blockType !== "fixed_event" && block.status !== "completed");
+    if (!targetBlock) return;
+
+    const keepElapsed =
+      timer.state === "idle" && timer.activeBlockId === targetBlock.id && timer.elapsedSeconds > 0;
+    const next = {
+      ...timer,
+      activeBlockId: targetBlock.id,
+      state: "running" as const,
+      elapsedSeconds: keepElapsed ? timer.elapsedSeconds : 0,
+    };
     setTimer(next);
     await persistTimer(next);
   }
@@ -626,9 +661,8 @@ function App() {
   }
 
   async function togglePause(): Promise<void> {
-    if (!timer) return;
-    const nextState: TimerSession["state"] = timer.state === "paused" ? "running" : "paused";
-    const next: TimerSession = { ...timer, state: nextState };
+    if (!timer || timer.state !== "running") return;
+    const next: TimerSession = { ...timer, state: "paused" };
     setTimer(next);
     await persistTimer(next);
   }
@@ -652,8 +686,9 @@ function App() {
   async function completeBlock(blockId: string): Promise<void> {
     const targetBlock = orderedTimeline.find((block) => block.id === blockId);
     if (!targetBlock || targetBlock.status === "completed") return;
-    await fetch(`${API}/day/${today}/timeline/${blockId}/complete`, { method: "POST" });
+    await dayStore.markBlockCompleted(today, blockId);
     setTimeline((current) => current.map((block) => (block.id === blockId ? { ...block, status: "completed" } : block)));
+    await refreshTasksFromStore();
     if (!timer || timer.activeBlockId !== blockId) return;
     const currentIndex = orderedTimeline.findIndex((block) => block.id === blockId);
     const nextBlock = orderedTimeline
@@ -681,14 +716,15 @@ function App() {
   async function saveTimelineEdit(block: Block): Promise<void> {
     const nextLabel = timelineEditDraft.label.trim();
     if (!nextLabel) return;
-    if (block.blockType === "focus" && block.sourceTaskId) {
+    if (block.blockType === "focus" && (block.sourceTaskId || block.sourceDailyRecurringId)) {
       const startTimeIso = isoAtTodayTime(timelineEditDraft.startTime);
       const focusEndTimeIso = addMinutesIso(startTimeIso, 25);
       const breakEndTimeIso = addMinutesIso(startTimeIso, 30);
-      await fetch(`${API}/day/${today}/timeline/${block.id}/focus-session`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label: nextLabel, startTimeIso, focusEndTimeIso, breakEndTimeIso }),
+      await dayStore.updateFocusSession(today, block.id, {
+        label: nextLabel,
+        startTimeIso,
+        focusEndTimeIso,
+        breakEndTimeIso,
       });
       setTimeline((current) =>
         sortByStartTime(
@@ -699,7 +735,14 @@ function App() {
             if (entry.blockType === "break" && blocksAreAdjacent(block, entry)) {
               return { ...entry, startTimeIso: focusEndTimeIso, endTimeIso: breakEndTimeIso };
             }
-            if (entry.sourceTaskId === block.sourceTaskId) {
+            if (block.sourceTaskId && entry.sourceTaskId === block.sourceTaskId) {
+              return { ...entry, label: nextLabel };
+            }
+            if (
+              block.sourceDailyRecurringId
+              && entry.sourceDailyRecurringId === block.sourceDailyRecurringId
+              && entry.blockType === "focus"
+            ) {
               return { ...entry, label: nextLabel };
             }
             return entry;
@@ -710,11 +753,7 @@ function App() {
       const startTimeIso = isoAtTodayTime(timelineEditDraft.startTime);
       const endTimeIso = isoAtTodayTime(timelineEditDraft.endTime);
       if (new Date(startTimeIso).getTime() >= new Date(endTimeIso).getTime()) return;
-      await fetch(`${API}/day/${today}/timeline/${block.id}/event`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label: nextLabel, startTimeIso, endTimeIso }),
-      });
+      await dayStore.updateTimelineEvent(today, block.id, { label: nextLabel, startTimeIso, endTimeIso });
       setTimeline((current) =>
         sortByStartTime(
           current.map((entry) => (entry.id === block.id ? { ...entry, label: nextLabel, startTimeIso, endTimeIso } : entry)),
@@ -749,23 +788,44 @@ function App() {
   async function addRecurringTemplate(): Promise<void> {
     const title = recurringDraft.title.trim();
     if (!title) return;
-    const response = await fetch(`${API}/day/${today}/recurring-templates`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title,
-        startTimeHhmm: recurringDraft.startTime,
-        endTimeHhmm: recurringDraft.endTime,
-      }),
+    const response = await dayStore.createRecurringTemplateForDay(today, {
+      title,
+      startTimeHhmm: recurringDraft.startTime,
+      endTimeHhmm: recurringDraft.endTime,
     });
-    if (!response.ok) return;
-    const data = await response.json();
-    setRecurring(normalizeRecurring(data.recurring));
+    if (!response.ok || !response.recurring) return;
+    setRecurring(normalizeRecurring(response.recurring));
     setRecurringDraft({
       title: "",
       startTime: recurringDraft.startTime,
       endTime: recurringDraft.endTime,
     });
+  }
+
+  async function setTimelineTaskCompletion(serverId: string, completed: boolean): Promise<void> {
+    const { ok } = await dayStore.setTaskCompletion(today, serverId, completed);
+    if (!ok) return;
+    await refreshTasksFromStore();
+    const [timelineData, timerData] = await Promise.all([dayStore.getTimeline(today), dayStore.getTimerSession(today)]);
+    setTimeline(sortByStartTime(timelineData.blocks));
+    setTimer(timerData.session);
+  }
+
+  async function deleteRecurringTemplateForItem(templateId: string, title: string): Promise<void> {
+    const confirmed = window.confirm(
+      `Delete recurring template "${title}"? It is removed for future days and the timeline is regenerated when one exists.`,
+    );
+    if (!confirmed) return;
+    await dayStore.deleteRecurringTemplate(today, templateId);
+    const [recurringData, timelineData, timerData] = await Promise.all([
+      dayStore.getRecurring(today),
+      dayStore.getTimeline(today),
+      dayStore.getTimerSession(today),
+    ]);
+    setRecurring(normalizeRecurring(recurringData.recurring));
+    setTimeline(sortByStartTime(timelineData.blocks));
+    setTimer(timerData.session);
+    await refreshTasksFromStore();
   }
 
   function updateEvent(clientId: string, updates: Partial<EventInput>): void {
@@ -1026,6 +1086,7 @@ function App() {
                           <option value="template">Every day</option>
                         </select>
                         <button
+                          type="button"
                           onClick={() =>
                             setRecurring((current) =>
                               current.map((entry) =>
@@ -1034,8 +1095,21 @@ function App() {
                             )
                           }
                           aria-label={item.isCompleted ? "Mark recurring as not completed" : "Mark recurring as completed"}
+                          title={
+                            item.isCompleted
+                              ? "Mark this recurring row as not completed for today (reset completion)"
+                              : "Mark this recurring row as completed for today"
+                          }
                         >
                           {item.isCompleted ? <RotateCcw size={18} aria-hidden="true" /> : <Check size={18} aria-hidden="true" />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void deleteRecurringTemplateForItem(item.recurringTemplateId, item.titleSnapshot)}
+                          aria-label={`Delete recurring template ${item.titleSnapshot}`}
+                          title="Delete this recurring template from all future days"
+                        >
+                          <Trash2 size={18} aria-hidden="true" />
                         </button>
                       </div>
                     </li>
@@ -1178,6 +1252,9 @@ function App() {
                     style={{ top: `${((hour - calendarBounds.startHour) * 60 / calendarBounds.totalMinutes) * 100}%` }}
                   />
                 ))}
+                {calendarNowLineStyle && (
+                  <div className="calendar-now-line" style={calendarNowLineStyle} aria-hidden="true" />
+                )}
                 {calendarItems.map((item) => {
                   const block = item.block;
                   const isActive = timer?.activeBlockId === block.id || timer?.activeBlockId === item.breakBlock?.id;
@@ -1277,29 +1354,79 @@ function App() {
             </div>
           </div>
 
-          <TimerCard
-            title="Pomodoro Timer 🍎"
-            variant={displayedBlock?.blockType ?? "empty"}
-            labelText={displayedBlock?.label ?? "No task ready"}
-            timeText={formatTimer(remainingSeconds)}
-            progressPercent={timerProgressPercent}
-            progressDanger={timerAlmostDone}
-            stateText={`State: ${timer?.state ?? "idle"}`}
-            helperText="Stay on this block until complete, then move to the next one."
-            actions={(
-              <>
-                <button onClick={() => void startTimer()} disabled={!timer || timerIsRunningWithBlock} aria-label="Start timer">
-                  <Play size={18} aria-hidden="true" />
-                </button>
-                <button onClick={() => void togglePause()} disabled={!timer || timer.state === "idle" || timer.state === "completed"}>
-                  {timer?.state === "paused" ? <Play size={18} aria-hidden="true" /> : <Pause size={18} aria-hidden="true" />}
-                </button>
-                <button onClick={() => void skipBlock()} disabled={!timer || !timer.activeBlockId} aria-label="Skip block">
-                  <SkipForward size={18} aria-hidden="true" />
-                </button>
-              </>
-            )}
-          />
+          <div className="timeline-timer-column">
+            <TimerCard
+              title="Pomodoro Timer 🍎"
+              variant={pomodoroTimerVariant}
+              labelText={displayedBlock?.label ?? "No task ready"}
+              timeText={formatTimer(remainingSeconds)}
+              progressPercent={timerProgressPercent}
+              progressDanger={timerAlmostDone}
+              stateText={`State: ${timer?.state ?? "idle"}`}
+              helperText="Stay on this block until complete, then move to the next one."
+              actions={(
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void startTimer()}
+                    disabled={!timer || timer.state === "running"}
+                    aria-label="Start timer"
+                  >
+                    <Play size={18} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void togglePause()}
+                    disabled={!timer || timer.state !== "running"}
+                    aria-label="Pause timer"
+                  >
+                    <Pause size={18} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void skipBlock()}
+                    disabled={!timer || !timer.activeBlockId}
+                    aria-label="Skip block"
+                  >
+                    <SkipForward size={18} aria-hidden="true" />
+                  </button>
+                </>
+              )}
+            />
+            <div className="panel timeline-task-list">
+              <h4>Today&apos;s tasks</h4>
+              <ul className="timeline-task-list-items">
+                {tasks
+                  .filter((task) => task.serverId)
+                  .map((task) => (
+                    <li key={task.serverId} className="timeline-task-list-row">
+                      <span className={task.status === "completed" ? "timeline-task-title is-completed" : "timeline-task-title"}>
+                        {task.title}
+                      </span>
+                      <div className="timeline-task-actions">
+                        {task.status !== "completed" ? (
+                          <button
+                            type="button"
+                            className="timeline-task-complete"
+                            onClick={() => void setTimelineTaskCompletion(task.serverId as string, true)}
+                          >
+                            Complete
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="timeline-task-undo"
+                            onClick={() => void setTimelineTaskCompletion(task.serverId as string, false)}
+                          >
+                            Undo
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          </div>
         </section>
       )}
     </main>

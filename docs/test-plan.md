@@ -3,7 +3,7 @@
 ## Quality goals
 
 - Planning output is deterministic and constraint-safe.
-- Timer behavior is reliable across refresh and restart.
+- Timer behavior is reliable across refresh.
 - Daily editing flow reliably saves inputs before timeline generation.
 - Core user journey remains stable as features expand.
 
@@ -15,44 +15,35 @@
 
 ## Test layers
 
-## 1) Unit tests (backend domain logic)
+### 1) Unit tests (planner engine)
 
-### Planner engine
+Run via `npm run test` (Vitest). Lives in [`src/planner.test.ts`](../src/planner.test.ts).
 
 - Schedules focus blocks in priority order.
 - Inserts breaks according to 25/5 rules.
-- Never overlaps fixed events.
+- Never overlaps fixed events or timed recurring events.
 - Produces overflow results when time is insufficient.
 - Handles boundary conditions (small windows, end-of-day, empty task list).
-- Enforces canonical local-day validation (invalid/ambiguous times rejected).
-- Regeneration preserves completed blocks and protects active running block.
+- Custom day planning windows are honored.
+- Repeated generation does not duplicate fixed events.
 
-### Repository behavior
+### 2) Storage and dayStore behavior (planned)
 
-- CRUD functions return expected shapes.
-- Ordering operations maintain stable rank.
-- Cascading deletions behave correctly by day context.
+`src/dayStore.ts` is the only module that mutates `localStorage`. It currently has no automated test suite; future tests should cover:
 
-### Timer session logic
+- First-run seeding of day boundary defaults and the 4 recurring templates.
+- `replaceTasks` clears `sourceTaskId` from existing timeline blocks.
+- `replaceEvents` deduplicates by `title|start|end`.
+- `generatePlan` preserves `completed` blocks and only replaces `planned` ones.
+- `resetAndGenerate` clears task statuses, recurring completions, and timer state.
+- `clearDay` re-materializes recurring from active templates.
+- `markBlockCompleted` flips both the block and its source task.
 
-- Start/pause/resume updates elapsed values correctly.
-- Skip transitions to next block and updates status.
-- Recovery reconstructs active state from persisted data.
+Use a thin localStorage stub (e.g. `vitest-localstorage-mock` or a hand-rolled in-memory `Storage`) when this layer is added.
 
-## 2) Integration tests (API + DB)
+### 3) Frontend component tests (deferred)
 
-- Startup migration creates required tables.
-- Daily flow endpoints work together for one date:
-  - create tasks
-  - save recurring daily state
-  - add fixed events
-  - generate plan
-  - read timeline
-  - persist timer session
-- Data survives process restart.
-- Endpoint contracts (success + error shapes) match shared schema definitions.
-
-## 3) Frontend component tests
+There is currently no component-test runner configured. When component tests are added, they should cover:
 
 - Editing workspace shows task, recurring, and event panels together for day setup.
 - Planning timer starts paused and supports start, pause, and reset.
@@ -62,21 +53,22 @@
 - Active timer panel reflects running and paused states.
 - Overflow warnings appear when unscheduled tasks exist.
 
-## 4) End-to-end smoke tests
+### 4) End-to-end smoke (manual)
 
 - New day opens editing mode with paused planning timer, saves the day, then shows the generated timeline.
 - Timeline edit flow reopens edit panels and recalculates the day after Save Day.
 - Repeated refresh/save/regenerate does not duplicate fixed events or stale planned blocks.
 - Timeline ordering places earlier events and blocks before later ones.
 - Refresh during active timer keeps expected active block.
-- User can complete recurring checklist and see persisted state.
+- User can complete recurring checklist and see persisted state after refresh.
+- `localStorage` clear returns the app to first-run defaults.
 
 ## Acceptance checklist before feature handoff
 
 - [ ] Requirements updated if behavior changed.
-- [ ] Unit/integration tests added for new logic.
+- [ ] Unit tests added for new planner or dayStore logic.
+- [ ] `npm run lint` and `npm run test` are green.
 - [ ] Manual verification notes captured for UI behavior.
-- [ ] No data-loss regressions in restart scenarios.
-- [ ] Contract changes include sample request/response/error payloads.
+- [ ] No data-loss regressions in refresh scenarios.
+- [ ] Storage shape changes documented in `docs/architecture.md` and bump `pomDay.schemaVersion` if breaking.
 - [ ] Non-goal scope check completed (no unplanned integrations/customizations).
-

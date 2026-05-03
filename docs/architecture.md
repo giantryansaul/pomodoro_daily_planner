@@ -1,207 +1,108 @@
-# Architecture (v1)
+# Architecture (v1, frontend-only)
 
 ## System overview
 
-v1 uses a frontend-first web app with a thin local backend:
+Pom Day is a single static React app:
 
-- **Frontend**: React + TypeScript + Vite.
-- **Backend**: Node sidecar (Express or Fastify) with `better-sqlite3`.
-- **Storage**: single SQLite file on disk.
+- **Frontend**: React 19 + TypeScript + Vite.
+- **Storage**: the browser's `window.localStorage`.
+- **Backend**: none. There is no server, no API, and no network call.
 
-Frontend communicates with backend over localhost API endpoints. Backend is the only layer that reads/writes the database.
+The app is built with `vite build` into a static `dist/` bundle and can be served by any static host or opened from disk.
 
-## Runtime and startup lifecycle
+## Module boundaries
 
-1. Launch command starts frontend and backend together.
-2. Backend resolves database file path.
-3. Backend opens SQLite file (create if missing).
-4. Backend applies migrations in order.
-5. Backend starts HTTP API server.
-6. Frontend loads daily state through API.
+```
+src/
+  main.tsx          # React bootstrap
+  App.tsx           # All UI; calls dayStore for every read/write
+  dayStore.ts       # The only module that touches localStorage; mirrors the old REST surface
+  planner.ts        # Pure scheduling function; returns ordered blocks + unscheduled list
+  storage/local.ts  # Typed JSON wrapper over window.localStorage
+  types.ts          # Shared domain types
+  planner.test.ts   # Vitest unit tests for planner
+```
 
-## Database file location
-
-- **Development default**: `<project directory>/productivity_app/data/morning-planner.db`
-- **Production default**: user data directory path to be finalized during packaging.
-
-The path must be configurable through environment variable so deployment environments can choose storage location.
+- `App.tsx` never reads or writes `localStorage` directly. It calls `dayStore.*` (async functions returning resolved Promises so call sites can `await` naturally).
+- `dayStore.ts` orchestrates day bundle reads, applies validation, calls `planner.generatePlan` when needed, and writes results back to storage.
+- `planner.ts` has zero I/O. It can be unit-tested without DOM or storage stubs.
 
 ## Time and date contract (canonical)
 
-To keep validation and scheduling deterministic, frontend and backend share these rules:
+To keep validation and scheduling deterministic:
 
-- **Day identity**: a day is represented as `YYYY-MM-DD` in the user's local timezone.
-- **API route date** (`/api/day/:date`) uses that local-day key format.
-- **Stored timestamps** are ISO-8601 UTC (`...Z`) for persisted event/block/session instants.
-- **Validation comparisons** for "same day" and planning windows are performed using the local timezone day key, not naive string compare on UTC dates.
-- **Planner ordering** uses normalized epoch timestamps derived from validated local-day inputs.
-- **DST handling**:
-  - Non-existent local times (spring-forward gaps) are rejected with validation errors.
-  - Ambiguous local times (fall-back overlap) are interpreted by explicit offset when provided; otherwise reject as ambiguous input.
+- **Day identity**: `YYYY-MM-DD` in the user's local timezone. Computed once at app load: `new Date().toISOString().slice(0, 10)`.
+- **Day-bundle storage key**: `pomDay.day.<YYYY-MM-DD>`.
+- **Stored timestamps** are ISO-8601 strings for persisted block/event instants.
+- **Validation comparisons** for "same day" and planning windows use the local-timezone day key.
+- **Planner ordering** uses normalized epoch timestamps derived from those ISO strings.
+
+DST behavior is inherited from the platform `Date`: non-existent local times produce invalid `Date` instances which validators reject; ambiguous local times use the platform's default offset.
+
+## Storage layout
+
+All keys are namespaced under `pomDay.*` in `window.localStorage`.
+
+| Key | Shape | Purpose |
+|---|---|---|
+| `pomDay.schemaVersion` | `"1"` | Bump on breaking changes; future migrations branch on this. |
+| `pomDay.dayBoundaryDefaults` | `{ dayStartTimeHhmm, dayEndTimeHhmm }` | Default planning window. Seeded with `07:00`/`19:00` on first read. |
+| `pomDay.recurringTemplates` | `RecurringTemplate[]` | Global recurring list. Seeded once with 4 defaults: Inbox zero, Read technical post, Exercise, Lunch. |
+| `pomDay.day.<YYYY-MM-DD>` | `DayBundle` | Per-day aggregate (see below). |
+
+### DayBundle
+
+```ts
+type DayBundle = {
+  id: string;                      // stable per-day uuid
+  dateIso: string;                 // matches the storage key suffix
+  tasks: Task[];                   // user-defined work for the day
+  fixedEvents: FixedEvent[];       // manual calendar constraints
+  dailyRecurring: DailyRecurringItem[]; // materialized from templates on first touch
+  timeline: ScheduleBlock[];       // generator output + completion status
+  timerSession: TimerSession;      // execution timer state for the day
+  createdAt: string;
+  updatedAt: string;
+};
+```
+
+The bundle is the unit of write — every `dayStore` mutation rewrites the whole bundle for its date. Bundle size is small (typical: a few KB) and well within `localStorage`'s ~5MB budget.
 
 ## Domain model
 
-### Core entities
-
-- **DayPlan**: per-date aggregate root for all day-bound records.
+- **DayBundle**: per-date aggregate root for all day-bound records.
 - **Task**: user-defined daily work item.
-- **RecurringTemplate**: reusable checklist template not tied to a specific day.
-- **DailyRecurringItem**: day-specific recurring checklist status materialized from a template.
-- **FixedEvent**: immutable day constraint (for example meeting/appointment), not a task.
-- **PlanRun**: one deterministic generation output for a day.
-- **PlanBlock**: generated focus or break block for a specific plan run.
-- **ExecutionSession**: live execution cursor/state for a day.
-- **BlockExecution**: per-block runtime progress and completion record.
+- **RecurringTemplate**: reusable global checklist template (lives outside any day bundle).
+- **DailyRecurringItem**: day-specific recurring instance materialized from a template.
+- **FixedEvent**: immutable day constraint (for example a meeting), not a task.
+- **ScheduleBlock**: focus, break, fixed_event, or recurring_event entry produced by the planner; carries a `status` (`planned`/`completed`/`skipped`).
+- **TimerSession**: live execution cursor and elapsed-seconds counter for the day.
 
-## SQLite schema (v2 simplified)
+## dayStore surface
 
-```sql
-CREATE TABLE IF NOT EXISTS day_plans (
-  id TEXT PRIMARY KEY,
-  date_iso TEXT NOT NULL UNIQUE,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
+`dayStore` mirrors the old REST contract one-for-one so call sites in `App.tsx` keep their shape. Each function is `async` and returns a resolved Promise.
 
-CREATE TABLE IF NOT EXISTS tasks (
-  id TEXT PRIMARY KEY,
-  day_plan_id TEXT NOT NULL REFERENCES day_plans(id) ON DELETE CASCADE,
-  title TEXT NOT NULL,
-  notes TEXT,
-  priority_rank INTEGER NOT NULL,
-  estimated_pomodoros INTEGER,
-  status TEXT NOT NULL DEFAULT 'pending',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  CHECK (estimated_pomodoros IS NULL OR estimated_pomodoros > 0),
-  UNIQUE (day_plan_id, priority_rank)
-);
+| Function | Purpose |
+|---|---|
+| `getDayBoundaryDefaults` / `setDayBoundaryDefaults` | Read or persist the default planning window. |
+| `getTasks` / `replaceTasks` | Bulk replace the day's task list. |
+| `getRecurring` / `updateRecurring` | Read materialized recurring items; apply per-day completion or timed/template edits. |
+| `createRecurringTemplateForDay` | Append to global templates and re-materialize the day. |
+| `getEvents` / `replaceEvents` | Bulk replace fixed events with HH:MM and overlap dedupe. |
+| `generatePlan` | Run `planner.generatePlan` and replace `planned` blocks (preserving completed history). |
+| `resetAndGenerate` | Reset task statuses, recurring completions, and timer state, then regenerate. |
+| `clearDay` | Wipe tasks, events, recurring, timeline, and timer; reseed recurring from active templates. |
+| `getTimeline` | Return the day's `timeline` slice. |
+| `markBlockCompleted` | Mark a timeline block (and any source task) completed. |
+| `updateFocusSession` / `updateTimelineEvent` | Inline-edit a focus block + adjacent break, or a fixed event. |
+| `getTimerSession` / `upsertTimerSession` | Read or upsert the per-day execution timer. |
 
-CREATE TABLE IF NOT EXISTS recurring_templates (
-  id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  is_active INTEGER NOT NULL DEFAULT 1,
-  sort_order INTEGER NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
+Validation rules carried over from the previous backend:
 
-CREATE TABLE IF NOT EXISTS daily_recurring_items (
-  id TEXT PRIMARY KEY,
-  day_plan_id TEXT NOT NULL REFERENCES day_plans(id) ON DELETE CASCADE,
-  recurring_template_id TEXT NOT NULL REFERENCES recurring_templates(id),
-  title_snapshot TEXT NOT NULL,
-  sort_order INTEGER NOT NULL,
-  is_completed INTEGER NOT NULL DEFAULT 0,
-  completed_at TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE (day_plan_id, recurring_template_id)
-);
-
-CREATE TABLE IF NOT EXISTS fixed_events (
-  id TEXT PRIMARY KEY,
-  day_plan_id TEXT NOT NULL REFERENCES day_plans(id) ON DELETE CASCADE,
-  title TEXT NOT NULL,
-  start_time_iso TEXT NOT NULL,
-  end_time_iso TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  CHECK (start_time_iso < end_time_iso)
-);
-
-CREATE TABLE IF NOT EXISTS plan_runs (
-  id TEXT PRIMARY KEY,
-  day_plan_id TEXT NOT NULL REFERENCES day_plans(id) ON DELETE CASCADE,
-  generation_version INTEGER NOT NULL,
-  generated_at TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  UNIQUE (day_plan_id, generation_version)
-);
-
-CREATE TABLE IF NOT EXISTS plan_blocks (
-  id TEXT PRIMARY KEY,
-  plan_run_id TEXT NOT NULL REFERENCES plan_runs(id) ON DELETE CASCADE,
-  source_task_id TEXT REFERENCES tasks(id),
-  block_type TEXT NOT NULL, -- focus | break
-  label TEXT NOT NULL,
-  start_time_iso TEXT NOT NULL,
-  end_time_iso TEXT NOT NULL,
-  sequence_index INTEGER NOT NULL,
-  planned_minutes INTEGER NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  CHECK (start_time_iso < end_time_iso),
-  UNIQUE (plan_run_id, sequence_index)
-);
-
-CREATE TABLE IF NOT EXISTS execution_sessions (
-  id TEXT PRIMARY KEY,
-  day_plan_id TEXT NOT NULL REFERENCES day_plans(id) ON DELETE CASCADE,
-  active_plan_run_id TEXT REFERENCES plan_runs(id),
-  active_block_id TEXT REFERENCES plan_blocks(id),
-  state TEXT NOT NULL, -- idle | running | paused | completed
-  started_at TEXT,
-  paused_at TEXT,
-  updated_at TEXT NOT NULL,
-  UNIQUE (day_plan_id)
-);
-
-CREATE TABLE IF NOT EXISTS block_executions (
-  id TEXT PRIMARY KEY,
-  plan_block_id TEXT NOT NULL REFERENCES plan_blocks(id) ON DELETE CASCADE,
-  state TEXT NOT NULL, -- pending | running | paused | completed | skipped
-  started_at TEXT,
-  completed_at TEXT,
-  elapsed_seconds INTEGER NOT NULL DEFAULT 0,
-  updated_at TEXT NOT NULL,
-  UNIQUE (plan_block_id)
-);
-```
-
-## Repository boundaries
-
-Backend repositories should be separated by responsibility:
-
-- `DayPlanRepository`: day lookup/create and aggregate root methods.
-- `TaskRepository`: CRUD + ranking operations for tasks.
-- `RecurringRepository`: template management + day materialization.
-- `FixedEventRepository`: CRUD and overlap checks for fixed events.
-- `PlanRepository`: create plan runs, save/replace generated plan blocks.
-- `ExecutionRepository`: persist/recover active execution session and per-block progress.
-
-Planner engine and API handlers depend on repository interfaces, not raw SQL calls.
-
-## API boundary (v1)
-
-Frontend talks only to these backend domains:
-
-- `GET/PUT /api/day/:date/tasks`
-- `GET/PUT /api/day/:date/recurring`
-- `GET/PUT /api/day/:date/events`
-- `POST /api/day/:date/generate-plan`
-- `GET /api/day/:date/timeline`
-- `GET/PUT /api/day/:date/execution-session`
-
-Endpoint shape can evolve, but domain separation should remain stable.
-
-## Modeling decisions to avoid foot-guns
-
-- Keep recurring templates globally managed; only daily recurring item instances are day-bound.
-- Keep fixed events as distinct constraints, not as synthetic task rows.
-- Keep generated plan data (`plan_runs`, `plan_blocks`) separate from runtime execution data (`execution_sessions`, `block_executions`).
-- Build timeline responses by composing fixed events and generated plan blocks at query time.
-- Treat `day_plans.date_iso` as the canonical day key for all day-level lookup and idempotent upsert flows.
-
-## API contract source of truth
-
-- Define request/response/error schemas for all v1 endpoints before frontend/backend parallel implementation.
-- Keep contracts in shared TypeScript schema definitions (or generated types from OpenAPI) consumed by both client and server.
-- Every endpoint must define:
-  - success payload shape
-  - validation error shape
-  - not-found/conflict error shape (when applicable)
-  - stable field naming and nullability policy
+- HH:MM strings match `^([01]\d|2[0-3]):[0-5]\d$`.
+- `start < end` for any time range.
+- Fixed events deduped by `title|startTimeIso|endTimeIso`.
+- Recurring template input requires non-empty title plus a valid start/end pair.
 
 ## Daily editing and timeline state model
 
@@ -210,11 +111,11 @@ The frontend presents a day in one of two UI modes:
 - **Editing mode**: task edits, recurring eliminations, manual events, and the paused-by-default planning timer.
 - **Timeline mode**: generated chronological timeline plus execution timer controls.
 
-The mode is derived from persisted backend state on load:
+The mode is derived from persisted state on load:
 
-- If no timeline blocks exist for the day, open editing mode.
+- If `dayBundle.timeline` is empty, open editing mode.
 - If timeline blocks exist, open timeline mode.
-- `Edit Timeline for Day` switches the UI back to editing mode without changing persistence until Save Day.
+- `Edit Timeline for Day` switches the UI back to editing mode without changing storage until Save Day.
 
 Save Day performs one idempotent regeneration flow:
 
@@ -222,23 +123,27 @@ Save Day performs one idempotent regeneration flow:
 2. Update day-specific recurring item completion/elimination states.
 3. Replace fixed events from the submitted event list.
 4. Generate a new plan from the latest persisted inputs.
-5. Replace prior planned timeline blocks for the day.
+5. Replace prior `planned` timeline blocks for the day; preserve completed history.
 6. Return the timeline sorted by normalized timestamp.
 
-This flow must not append duplicate fixed events or leave stale planned blocks after refresh/re-save. Frontend may cache form state for UX responsiveness, but backend persisted state remains authoritative.
+This flow does not append duplicate fixed events or leave stale planned blocks after refresh/re-save.
 
-## Definition of done evidence
+## Modeling decisions to avoid foot-guns
 
-For architecture-affecting changes, PR/review notes must include:
-
-- updated contract docs for changed endpoints
-- migration impact statement (if schema changed)
-- restart/recovery verification notes
-- explicit out-of-scope confirmation for v1 non-goals
+- Recurring templates are global; only daily recurring item instances are day-bound.
+- Fixed events are distinct constraints, not synthetic task rows.
+- Generated planned blocks live in the same `timeline` array as completed history; `replacePlanned` only touches blocks whose `status === "planned"`.
+- Timeline rendering composes fixed events, recurring events, and generated focus/break blocks; sort key is `startTimeIso`.
 
 ## Integration-ready design points
 
-- Keep provider adapters (calendar, Obsidian) outside core planner and repositories.
-- Introduce adapter interfaces early, implement adapters later.
-- Never mix external provider payloads directly into core tables; map to internal model first.
+- A future calendar/Obsidian adapter slots in as a new module that reads and produces the existing types — `dayStore` then accepts adapter outputs through new functions rather than coupling them to `App.tsx`.
+- Provider payloads are never persisted directly; map to internal model first.
 
+## Definition of done evidence
+
+For architecture-affecting changes, change notes must include:
+
+- updated storage shape documentation if `dayStore` keys or bundle fields change
+- migration impact statement (how is existing localStorage handled? bump `schemaVersion`?)
+- explicit out-of-scope confirmation for v1 non-goals

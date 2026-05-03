@@ -33,7 +33,6 @@ export interface DailyRecurringItem {
 }
 
 export type RecurringEditScope = "today" | "template";
-export type ResetDayMode = "state" | "clear";
 
 export interface DayBoundaryDefaults {
   dayStartTimeHhmm: string;
@@ -68,6 +67,8 @@ export interface ScheduleBlock {
   id: string;
   dayPlanId: string;
   sourceTaskId: string | null;
+  /** Daily recurring row id when this focus block was generated from a recurring window. */
+  sourceDailyRecurringId: string | null;
   sourceEventId: string | null;
   blockType: BlockType;
   label: string;
@@ -97,11 +98,6 @@ export interface EventInput {
   title: string;
   startTimeIso: string;
   endTimeIso: string;
-}
-
-export interface RecurringCompletionUpdate {
-  id: string;
-  isCompleted: boolean;
 }
 
 export interface UnscheduledTask {

@@ -13,9 +13,9 @@ Generate a deterministic daily timeline that places focus and break blocks aroun
 
 ## Outputs
 
-- Ordered `schedule_blocks` list with `focus`, `break`, and `fixed_event` blocks.
-- `unscheduled_tasks` payload with reasons when all tasks cannot be fitted.
-- Summary totals (scheduled focus minutes, break minutes, unscheduled count).
+- Ordered `ScheduleBlock[]` with `focus`, `break`, `fixed_event`, and `recurring_event` entries.
+- `unscheduledTasks` array with reasons when all tasks cannot be fitted.
+- Summary totals (scheduled focus minutes, break minutes, unscheduled count) — derivable from the returned blocks.
 
 ## Deterministic algorithm
 
@@ -79,11 +79,11 @@ Normalization requirements:
 
 ## Timer coupling rules
 
-- Planner output is immutable once execution starts unless user regenerates plan.
-- Regeneration replaces only future `planned` blocks and must preserve completed history.
+- Planner output is immutable once execution starts unless the user regenerates the plan.
+- Regeneration replaces only future `planned` blocks; completed history is preserved by `dayStore.generatePlan`.
 - The currently active/running block is never deleted during regeneration in v1.
-- If regenerated timeline conflicts with current active block timing, return explicit conflict error and require user action (skip/complete/pause and retry).
-- Timer reads active block from `timer_sessions` and timeline order from `schedule_blocks`.
+- If a regenerated timeline conflicts with the current active block timing, the regeneration flow must return an explicit conflict and require user action (skip/complete/pause and retry).
+- The timer reads its active block id from the day bundle's `timerSession` and the ordered blocks from the same bundle's `timeline` array.
 
 ## Pseudocode
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { generatePlan } from "./planner.js";
-import type { FixedEvent, Task } from "./types.js";
+import { generatePlan } from "./planner";
+import type { FixedEvent, Task } from "./types";
 
 function makeTask(id: string, title: string, priorityRank: number, estimatedPomodoros = 1): Task {
   return {
@@ -102,7 +102,7 @@ describe("generatePlan", () => {
     expect(breakEnd - breakStart).toBe(5 * 60_000);
   });
 
-  it("does not schedule focus sessions into timed recurring events", () => {
+  it("tiles recurring windows into focus+break and keeps task focus after the window", () => {
     const tasks = [makeTask("a", "Deep work", 1)];
     const fixedEvents: FixedEvent[] = [];
     const recurringEvents: FixedEvent[] = [
@@ -116,13 +116,44 @@ describe("generatePlan", () => {
     ];
 
     const result = generatePlan("2026-04-25", tasks, fixedEvents, "day-1", recurringEvents);
-    const focus = result.blocks.find((block) => block.blockType === "focus");
-    const recurring = result.blocks.find((block) => block.blockType === "recurring_event");
+    const recurringFocus = result.blocks.find((block) => block.blockType === "focus" && block.sourceDailyRecurringId === "rec-1");
+    const recurringBreak = result.blocks.find((block) => block.blockType === "break" && block.startTimeIso === recurringFocus?.endTimeIso);
+    const taskFocus = result.blocks.find((block) => block.blockType === "focus" && block.sourceTaskId === "a");
     const recurringEnd = new Date(recurringEvents[0].endTimeIso).getTime();
-    const focusStart = new Date(focus?.startTimeIso ?? "").getTime();
+    const taskFocusStart = new Date(taskFocus?.startTimeIso ?? "").getTime();
 
-    expect(recurring?.label).toBe("Morning routine");
-    expect(focusStart).toBeGreaterThanOrEqual(recurringEnd);
+    expect(recurringFocus?.label).toBe("Morning routine");
+    expect(recurringFocus?.sourceDailyRecurringId).toBe("rec-1");
+    expect(recurringBreak?.label).toBe("Break");
+    expect(taskFocusStart).toBeGreaterThanOrEqual(recurringEnd);
+  });
+
+  it("schedules two pomodoro cycles in a 60-minute recurring window", () => {
+    const tasks: Task[] = [];
+    const fixedEvents: FixedEvent[] = [];
+    const recurringEvents: FixedEvent[] = [
+      {
+        id: "rec-long",
+        dayPlanId: "day-1",
+        title: "Deep routine",
+        startTimeIso: "2026-04-25T12:00:00",
+        endTimeIso: "2026-04-25T13:00:00",
+      },
+    ];
+
+    const result = generatePlan("2026-04-25", tasks, fixedEvents, "day-1", recurringEvents);
+    const recurringFocusBlocks = result.blocks.filter(
+      (block) => block.blockType === "focus" && block.sourceDailyRecurringId === "rec-long",
+    );
+    const recurringBreakBlocks = result.blocks.filter(
+      (block) => block.blockType === "break" && block.startTimeIso >= recurringEvents[0].startTimeIso,
+    );
+
+    expect(recurringFocusBlocks).toHaveLength(2);
+    expect(recurringBreakBlocks.length).toBeGreaterThanOrEqual(2);
+    expect(new Date(recurringFocusBlocks[1].startTimeIso).getTime() - new Date(recurringFocusBlocks[0].startTimeIso).getTime()).toBe(
+      30 * 60_000,
+    );
   });
 
   it("respects a custom day planning window", () => {

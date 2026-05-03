@@ -68,12 +68,12 @@ The app uses two primary modes for a day: **editing** and **timeline**.
 ### Timer execution
 
 - Timer can start, pause, resume, skip to next block, and mark block complete.
-- Active timer state survives refresh/restart through backend persistence.
+- Active timer state survives refresh/restart through `localStorage` persistence.
 
 ## Non-functional requirements
 
-- Develop Local-first operation with no required network access (other than local network).
-- Durable persistence in local SQLite file.
+- Frontend-only operation. No required network access; the static bundle works offline once loaded.
+- Durable per-browser persistence in `window.localStorage`. Data does not sync across browsers or devices.
 - Deterministic scheduling output for identical inputs.
 - Fast startup suitable for daily morning use.
 - Accessible UI controls and clear text contrast.
