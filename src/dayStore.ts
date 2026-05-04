@@ -1,4 +1,4 @@
-import { generatePlan } from "./planner";
+import { FOCUS_SESSION_MINUTES, generatePlan } from "./planner";
 import { StorageKeys, readJson, writeJson } from "./storage/local";
 import type {
   DailyRecurringItem,
@@ -8,6 +8,7 @@ import type {
   PlannerResult,
   RecurringTemplate,
   RecurringTemplateInput,
+  RecurringTemplateKind,
   RecurringUpdate,
   ScheduleBlock,
   Task,
@@ -36,11 +37,17 @@ const DEFAULT_DAY_START_TIME = "07:00";
 const DEFAULT_DAY_END_TIME = "19:00";
 const HHMM_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-const DEFAULT_RECURRING_TEMPLATES: ReadonlyArray<{ title: string; start: string; end: string }> = [
-  { title: "Inbox zero", start: "07:00", end: "07:30" },
-  { title: "Read technical post", start: "07:30", end: "08:00" },
-  { title: "Exercise", start: "12:00", end: "12:30" },
-  { title: "Lunch", start: "12:30", end: "13:00" },
+const DEFAULT_RECURRING_TEMPLATES: ReadonlyArray<{
+  title: string;
+  start: string;
+  end: string;
+  kind: RecurringTemplateKind;
+  estimatedPomodoros: number | null;
+}> = [
+  { title: "Inbox zero", start: "07:00", end: "07:30", kind: "task", estimatedPomodoros: 1 },
+  { title: "Read technical post", start: "07:30", end: "08:00", kind: "task", estimatedPomodoros: 1 },
+  { title: "Exercise", start: "12:00", end: "12:30", kind: "task", estimatedPomodoros: 1 },
+  { title: "Lunch", start: "12:30", end: "13:00", kind: "calendar_event", estimatedPomodoros: null },
 ];
 
 function nowIso(): string {
@@ -49,6 +56,58 @@ function nowIso(): string {
 
 function newId(): string {
   return crypto.randomUUID();
+}
+
+function hhmmToMinutes(hhmm: string): number {
+  const [hoursText, minutesText] = hhmm.split(":");
+  const hours = Number(hoursText);
+  const minutes = Number(minutesText);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return 0;
+  return hours * 60 + minutes;
+}
+
+function addMinutesToHhmm(hhmm: string, add: number): string {
+  const total = hhmmToMinutes(hhmm) + add;
+  const wrapped = ((total % 1440) + 1440) % 1440;
+  const hours = Math.floor(wrapped / 60);
+  const minutes = wrapped % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function clampRecurringPomodoros(n: number): number {
+  return Math.min(5, Math.max(1, Math.round(n)));
+}
+
+function derivePomodorosFromStartEnd(start: string, end: string): number {
+  const a = hhmmToMinutes(start);
+  const b = hhmmToMinutes(end);
+  const span = b > a ? b - a : b + 1440 - a;
+  if (span <= 0) return 1;
+  const derived = Math.floor(span / FOCUS_SESSION_MINUTES);
+  return derived >= 1 ? clampRecurringPomodoros(derived) : 1;
+}
+
+function normalizeRecurringTemplate(template: RecurringTemplate): RecurringTemplate {
+  const kind: RecurringTemplateKind = template.kind === "calendar_event" ? "calendar_event" : "task";
+  if (kind === "calendar_event") {
+    return { ...template, kind, estimatedPomodoros: null };
+  }
+  let pomos =
+    template.estimatedPomodoros != null && template.estimatedPomodoros >= 1
+      ? clampRecurringPomodoros(template.estimatedPomodoros)
+      : template.startTimeHhmm && template.endTimeHhmm && HHMM_PATTERN.test(template.startTimeHhmm) && HHMM_PATTERN.test(template.endTimeHhmm)
+        ? derivePomodorosFromStartEnd(template.startTimeHhmm, template.endTimeHhmm)
+        : 1;
+  const derivedEnd =
+    template.startTimeHhmm
+      ? addMinutesToHhmm(template.startTimeHhmm, pomos * FOCUS_SESSION_MINUTES)
+      : template.endTimeHhmm;
+  return {
+    ...template,
+    kind,
+    estimatedPomodoros: pomos,
+    endTimeHhmm: derivedEnd ?? template.endTimeHhmm,
+  };
 }
 
 function readDayBoundaryDefaults(): DayBoundaryDefaults {
@@ -66,15 +125,24 @@ function readDayBoundaryDefaults(): DayBoundaryDefaults {
 
 function readRecurringTemplates(): RecurringTemplate[] {
   const stored = readJson<RecurringTemplate[]>(StorageKeys.recurringTemplates);
-  if (Array.isArray(stored)) return stored;
+  if (Array.isArray(stored)) {
+    return stored.map((template) =>
+      normalizeRecurringTemplate({
+        ...template,
+        kind: template.kind === "calendar_event" ? "calendar_event" : "task",
+      }),
+    );
+  }
   const seeded: RecurringTemplate[] = DEFAULT_RECURRING_TEMPLATES.map((template, index) => ({
     id: newId(),
     title: template.title,
     startTimeHhmm: template.start,
     endTimeHhmm: template.end,
+    estimatedPomodoros: template.estimatedPomodoros,
     sortOrder: index,
     isActive: true,
-  }));
+    kind: template.kind,
+  })).map((template) => normalizeRecurringTemplate(template));
   writeJson(StorageKeys.recurringTemplates, seeded);
   return seeded;
 }
@@ -102,14 +170,24 @@ function materializeRecurringForDay(dayPlanId: string, existing: DailyRecurringI
     .slice()
     .sort((a, b) => a.sortOrder - b.sortOrder)
     .map((template) => {
+      const kind: RecurringTemplateKind = template.kind === "calendar_event" ? "calendar_event" : "task";
+      const pomos = kind === "task" ? clampRecurringPomodoros(template.estimatedPomodoros ?? 1) : null;
+      const endSnap =
+        kind === "calendar_event"
+          ? template.endTimeHhmm
+          : template.startTimeHhmm
+            ? addMinutesToHhmm(template.startTimeHhmm, (pomos ?? 1) * FOCUS_SESSION_MINUTES)
+            : template.endTimeHhmm;
       const prior = byTemplateId.get(template.id);
       if (prior) {
         return {
           ...prior,
           titleSnapshot: template.title,
           startTimeSnapshotHhmm: template.startTimeHhmm,
-          endTimeSnapshotHhmm: template.endTimeHhmm,
+          endTimeSnapshotHhmm: endSnap,
+          estimatedPomodoros: pomos,
           sortOrder: template.sortOrder,
+          kind,
         };
       }
       return {
@@ -118,9 +196,11 @@ function materializeRecurringForDay(dayPlanId: string, existing: DailyRecurringI
         recurringTemplateId: template.id,
         titleSnapshot: template.title,
         startTimeSnapshotHhmm: template.startTimeHhmm,
-        endTimeSnapshotHhmm: template.endTimeHhmm,
+        endTimeSnapshotHhmm: endSnap,
+        estimatedPomodoros: pomos,
         sortOrder: template.sortOrder,
         isCompleted: false,
+        kind,
       };
     });
 }
@@ -136,6 +216,46 @@ function migrateTimelineBlocks(blocks: ScheduleBlock[]): ScheduleBlock[] {
   }));
 }
 
+function hhmmFromIsoLocal(iso: string): string {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function migrateDailyRecurringRows(items: DailyRecurringItem[]): DailyRecurringItem[] {
+  const templates = readRecurringTemplates();
+  const byTemplateId = new Map(templates.map((t) => [t.id, t]));
+  return items.map((item) => {
+    const t = byTemplateId.get(item.recurringTemplateId);
+    const kind: RecurringTemplateKind =
+      t?.kind === "calendar_event" || item.kind === "calendar_event" ? "calendar_event" : "task";
+    if (kind === "calendar_event") {
+      return {
+        ...item,
+        kind,
+        estimatedPomodoros: null,
+      };
+    }
+    const pomos =
+      item.estimatedPomodoros != null && item.estimatedPomodoros >= 1
+        ? clampRecurringPomodoros(item.estimatedPomodoros)
+        : t?.estimatedPomodoros != null && t.estimatedPomodoros >= 1
+          ? clampRecurringPomodoros(t.estimatedPomodoros)
+          : item.startTimeSnapshotHhmm && item.endTimeSnapshotHhmm
+            ? derivePomodorosFromStartEnd(item.startTimeSnapshotHhmm, item.endTimeSnapshotHhmm)
+            : 1;
+    const endSnap =
+      item.startTimeSnapshotHhmm
+        ? addMinutesToHhmm(item.startTimeSnapshotHhmm, pomos * FOCUS_SESSION_MINUTES)
+        : item.endTimeSnapshotHhmm;
+    return {
+      ...item,
+      kind,
+      estimatedPomodoros: pomos,
+      endTimeSnapshotHhmm: endSnap ?? item.endTimeSnapshotHhmm,
+    };
+  });
+}
+
 function writeDayBundle(bundle: DayBundle): void {
   bundle.updatedAt = nowIso();
   writeJson(StorageKeys.day(bundle.dateIso), bundle);
@@ -148,6 +268,12 @@ function loadOrCreateDayBundle(dateIso: string): DayBundle {
     if (!Array.isArray(stored.dailyRecurring) || stored.dailyRecurring.length === 0) {
       stored.dailyRecurring = materializeRecurringForDay(stored.id, stored.dailyRecurring ?? []);
       writeDayBundle(stored);
+    } else {
+      const nextRecurring = migrateDailyRecurringRows(stored.dailyRecurring);
+      if (JSON.stringify(nextRecurring) !== JSON.stringify(stored.dailyRecurring)) {
+        stored.dailyRecurring = nextRecurring;
+        writeDayBundle(stored);
+      }
     }
     return stored;
   }
@@ -172,13 +298,25 @@ function eventKey(event: EventInput): string {
 }
 
 function dailyRecurringToFixedEvent(dateIso: string, dayPlanId: string, item: DailyRecurringItem): FixedEvent | null {
-  if (!item.startTimeSnapshotHhmm || !item.endTimeSnapshotHhmm) return null;
+  if (!item.startTimeSnapshotHhmm) return null;
+  if (item.kind === "calendar_event") {
+    if (!item.endTimeSnapshotHhmm) return null;
+    return {
+      id: item.id,
+      dayPlanId,
+      title: item.titleSnapshot,
+      startTimeIso: `${dateIso}T${item.startTimeSnapshotHhmm}:00`,
+      endTimeIso: `${dateIso}T${item.endTimeSnapshotHhmm}:00`,
+    };
+  }
+  const pomos = clampRecurringPomodoros(item.estimatedPomodoros ?? 1);
+  const endHhmm = addMinutesToHhmm(item.startTimeSnapshotHhmm, pomos * FOCUS_SESSION_MINUTES);
   return {
     id: item.id,
     dayPlanId,
     title: item.titleSnapshot,
     startTimeIso: `${dateIso}T${item.startTimeSnapshotHhmm}:00`,
-    endTimeIso: `${dateIso}T${item.endTimeSnapshotHhmm}:00`,
+    endTimeIso: `${dateIso}T${endHhmm}:00`,
   };
 }
 
@@ -197,16 +335,25 @@ function replacePlannedTimeline(bundle: DayBundle, newPlannedBlocks: ScheduleBlo
 }
 
 function generateAndPersist(bundle: DayBundle, plannerWindow: PlannerWindowInput): PlannerResult {
-  const recurringEvents: FixedEvent[] = bundle.dailyRecurring
-    .map((item) => dailyRecurringToFixedEvent(bundle.dateIso, bundle.id, item))
-    .filter((event): event is FixedEvent => event !== null);
+  const recurringTaskWindows: FixedEvent[] = [];
+  const recurringCalendarEvents: FixedEvent[] = [];
+  for (const item of bundle.dailyRecurring) {
+    const fe = dailyRecurringToFixedEvent(bundle.dateIso, bundle.id, item);
+    if (!fe) continue;
+    if (item.kind === "calendar_event") {
+      recurringCalendarEvents.push(fe);
+    } else {
+      recurringTaskWindows.push(fe);
+    }
+  }
   const result = generatePlan(
     bundle.dateIso,
     bundle.tasks,
     bundle.fixedEvents,
     bundle.id,
-    recurringEvents,
-    plannerWindow,
+    recurringTaskWindows,
+    recurringCalendarEvents,
+    parsePlannerWindow(plannerWindow),
   );
   replacePlannedTimeline(bundle, result.blocks);
   writeDayBundle(bundle);
@@ -231,17 +378,30 @@ function parseRecurringTemplateInput(input: RecurringTemplateInput | undefined):
   const title = typeof input?.title === "string" ? input.title.trim() : "";
   const startTimeHhmm = typeof input?.startTimeHhmm === "string" ? input.startTimeHhmm : null;
   const endTimeHhmm = typeof input?.endTimeHhmm === "string" ? input.endTimeHhmm : null;
+  const kind: RecurringTemplateKind = input?.kind === "calendar_event" ? "calendar_event" : "task";
   if (!title) return null;
-  if (
-    !startTimeHhmm
-    || !endTimeHhmm
-    || !HHMM_PATTERN.test(startTimeHhmm)
-    || !HHMM_PATTERN.test(endTimeHhmm)
-    || startTimeHhmm >= endTimeHhmm
-  ) {
+
+  if (kind === "calendar_event") {
+    if (
+      !startTimeHhmm
+      || !endTimeHhmm
+      || !HHMM_PATTERN.test(startTimeHhmm)
+      || !HHMM_PATTERN.test(endTimeHhmm)
+      || startTimeHhmm >= endTimeHhmm
+    ) {
+      return null;
+    }
+    return { title, startTimeHhmm, endTimeHhmm, kind };
+  }
+
+  const rawPomos = input?.estimatedPomodoros;
+  const estimatedPomodoros =
+    typeof rawPomos === "number" && Number.isFinite(rawPomos) ? clampRecurringPomodoros(rawPomos) : null;
+  if (!startTimeHhmm || !HHMM_PATTERN.test(startTimeHhmm) || estimatedPomodoros == null) {
     return null;
   }
-  return { title, startTimeHhmm, endTimeHhmm };
+  const derivedEnd = addMinutesToHhmm(startTimeHhmm, estimatedPomodoros * FOCUS_SESSION_MINUTES);
+  return { title, startTimeHhmm, endTimeHhmm: derivedEnd, kind, estimatedPomodoros };
 }
 
 function applyRecurringUpdates(bundle: DayBundle, updates: RecurringUpdate[]): void {
@@ -254,7 +414,8 @@ function applyRecurringUpdates(bundle: DayBundle, updates: RecurringUpdate[]): v
     (update) =>
       typeof update.titleSnapshot === "string"
       || typeof update.startTimeHhmm === "string"
-      || typeof update.endTimeHhmm === "string",
+      || typeof update.endTimeHhmm === "string"
+      || typeof update.estimatedPomodoros === "number",
   );
 
   const updatesById = new Map(validUpdates.map((update) => [update.id, update]));
@@ -269,19 +430,39 @@ function applyRecurringUpdates(bundle: DayBundle, updates: RecurringUpdate[]): v
 
       const nextTitleSnapshot = update.titleSnapshot ?? item.titleSnapshot;
       const nextStartTime = update.startTimeHhmm ?? item.startTimeSnapshotHhmm;
-      const nextEndTime = update.endTimeHhmm ?? item.endTimeSnapshotHhmm;
+      const nextPomosTask =
+        item.kind === "task"
+          ? (typeof update.estimatedPomodoros === "number"
+            ? clampRecurringPomodoros(update.estimatedPomodoros)
+            : clampRecurringPomodoros(item.estimatedPomodoros ?? 1))
+          : null;
+      const nextEndTime =
+        item.kind === "calendar_event"
+          ? (update.endTimeHhmm ?? item.endTimeSnapshotHhmm)
+          : nextStartTime
+            ? addMinutesToHhmm(nextStartTime, (nextPomosTask ?? 1) * FOCUS_SESSION_MINUTES)
+            : item.endTimeSnapshotHhmm;
 
-      if (update.editScope === "template") {
-        const templateIndex = templates.findIndex((template) => template.id === item.recurringTemplateId);
-        if (templateIndex !== -1) {
+      const templateIndex = templates.findIndex((template) => template.id === item.recurringTemplateId);
+      if (templateIndex !== -1) {
+        if (item.kind === "calendar_event") {
           templates[templateIndex] = {
             ...templates[templateIndex],
             title: nextTitleSnapshot,
             startTimeHhmm: nextStartTime,
             endTimeHhmm: nextEndTime,
+            estimatedPomodoros: null,
           };
-          templatesChanged = true;
+        } else {
+          templates[templateIndex] = {
+            ...templates[templateIndex],
+            title: nextTitleSnapshot,
+            startTimeHhmm: nextStartTime,
+            endTimeHhmm: nextEndTime,
+            estimatedPomodoros: nextPomosTask ?? 1,
+          };
         }
+        templatesChanged = true;
       }
 
       return {
@@ -289,6 +470,7 @@ function applyRecurringUpdates(bundle: DayBundle, updates: RecurringUpdate[]): v
         titleSnapshot: nextTitleSnapshot,
         startTimeSnapshotHhmm: nextStartTime,
         endTimeSnapshotHhmm: nextEndTime,
+        estimatedPomodoros: item.kind === "task" ? (nextPomosTask ?? 1) : null,
         isCompleted: update.isCompleted,
       };
     });
@@ -436,7 +618,7 @@ export const dayStore = {
         .filter(
           (block) =>
             block.sourceDailyRecurringId === dailyRecurringId
-            && (block.blockType === "focus" || block.blockType === "break"),
+            && (block.blockType === "focus" || block.blockType === "break" || block.blockType === "recurring_event"),
         )
         .map((block) => block.id),
     );
@@ -446,7 +628,12 @@ export const dayStore = {
     );
 
     bundle.timeline = bundle.timeline.map((block) => {
-      if (block.sourceDailyRecurringId !== dailyRecurringId || (block.blockType !== "focus" && block.blockType !== "break")) {
+      if (block.sourceDailyRecurringId !== dailyRecurringId) return block;
+      if (
+        block.blockType !== "focus"
+        && block.blockType !== "break"
+        && block.blockType !== "recurring_event"
+      ) {
         return block;
       }
       if (completed && block.status === "planned") {
@@ -488,7 +675,7 @@ export const dayStore = {
     if (!task) return { ok: false };
 
     const current = Math.max(1, task.estimatedPomodoros ?? 1);
-    const next = Math.min(6, Math.max(1, current + delta));
+    const next = Math.min(5, Math.max(1, current + delta));
     if (next === current) {
       return { ok: true };
     }
@@ -508,13 +695,16 @@ export const dayStore = {
     if (!validInput) return { ok: false };
     const templates = readRecurringTemplates();
     const maxSort = templates.reduce((current, template) => Math.max(current, template.sortOrder), -1);
+    const isCalendar = validInput.kind === "calendar_event";
     const created: RecurringTemplate = {
       id: newId(),
       title: validInput.title,
       startTimeHhmm: validInput.startTimeHhmm ?? null,
       endTimeHhmm: validInput.endTimeHhmm ?? null,
+      estimatedPomodoros: isCalendar ? null : clampRecurringPomodoros(validInput.estimatedPomodoros ?? 1),
       sortOrder: maxSort + 1,
       isActive: true,
+      kind: validInput.kind ?? "task",
     };
     writeRecurringTemplates([...templates, created]);
 
@@ -608,14 +798,86 @@ export const dayStore = {
     const bundle = loadOrCreateDayBundle(dateIso);
     const target = bundle.timeline.find((block) => block.id === blockId);
     if (!target) return { ok: false };
-    bundle.timeline = bundle.timeline.map((block) =>
-      block.id === blockId ? { ...block, status: "completed" } : block,
-    );
+
+    const recurringId = target.sourceDailyRecurringId;
+    const completeAllRecurringFocuses =
+      Boolean(recurringId) && target.blockType === "focus";
+
+    bundle.timeline = bundle.timeline.map((block) => {
+      if (block.id === blockId) {
+        return { ...block, status: "completed" };
+      }
+      if (
+        completeAllRecurringFocuses
+        && block.sourceDailyRecurringId === recurringId
+        && block.blockType === "focus"
+      ) {
+        return { ...block, status: "completed" as const };
+      }
+      return block;
+    });
+
     if (target.sourceTaskId) {
       bundle.tasks = bundle.tasks.map((task) =>
         task.id === target.sourceTaskId ? { ...task, status: "completed" } : task,
       );
     }
+
+    if (completeAllRecurringFocuses && recurringId) {
+      bundle.dailyRecurring = bundle.dailyRecurring.map((item) =>
+        item.id === recurringId ? { ...item, isCompleted: true } : item,
+      );
+    }
+
+    if (target.blockType === "recurring_event" && target.sourceDailyRecurringId) {
+      const rid = target.sourceDailyRecurringId;
+      bundle.dailyRecurring = bundle.dailyRecurring.map((item) =>
+        item.id === rid ? { ...item, isCompleted: true } : item,
+      );
+    }
+
+    writeDayBundle(bundle);
+    return { ok: true };
+  },
+
+  async revertBlockCompletion(dateIso: string, blockId: string): Promise<{ ok: boolean }> {
+    const bundle = loadOrCreateDayBundle(dateIso);
+    const target = bundle.timeline.find((block) => block.id === blockId);
+    if (!target || target.status !== "completed") return { ok: false };
+
+    const recurringId = target.sourceDailyRecurringId;
+    const reopenAllRecurringFocuses =
+      Boolean(recurringId) && target.blockType === "focus";
+
+    bundle.timeline = bundle.timeline.map((block) => {
+      if (reopenAllRecurringFocuses && block.sourceDailyRecurringId === recurringId && block.blockType === "focus") {
+        return { ...block, status: "planned" as const };
+      }
+      if (block.id === blockId) {
+        return { ...block, status: "planned" as const };
+      }
+      return block;
+    });
+
+    if (target.sourceTaskId) {
+      bundle.tasks = bundle.tasks.map((task) =>
+        task.id === target.sourceTaskId ? { ...task, status: "pending" as const } : task,
+      );
+    }
+
+    if (reopenAllRecurringFocuses && recurringId) {
+      bundle.dailyRecurring = bundle.dailyRecurring.map((item) =>
+        item.id === recurringId ? { ...item, isCompleted: false } : item,
+      );
+    }
+
+    if (target.blockType === "recurring_event" && target.sourceDailyRecurringId) {
+      const rid = target.sourceDailyRecurringId;
+      bundle.dailyRecurring = bundle.dailyRecurring.map((item) =>
+        item.id === rid ? { ...item, isCompleted: false } : item,
+      );
+    }
+
     writeDayBundle(bundle);
     return { ok: true };
   },
@@ -686,13 +948,43 @@ export const dayStore = {
       return { ok: false };
     }
     const bundle = loadOrCreateDayBundle(dateIso);
-    const target = bundle.timeline.find((block) => block.id === blockId && block.blockType === "fixed_event");
+    const target = bundle.timeline.find(
+      (block) =>
+        block.id === blockId && (block.blockType === "fixed_event" || block.blockType === "recurring_event"),
+    );
     if (!target) return { ok: false };
     bundle.timeline = bundle.timeline.map((block) =>
       block.id === blockId
         ? { ...block, label, startTimeIso: input.startTimeIso, endTimeIso: input.endTimeIso }
         : block,
     );
+
+    if (target.blockType === "recurring_event" && target.sourceDailyRecurringId) {
+      const startHhmm = hhmmFromIsoLocal(input.startTimeIso);
+      const endHhmm = hhmmFromIsoLocal(input.endTimeIso);
+      const rid = target.sourceDailyRecurringId;
+      bundle.dailyRecurring = bundle.dailyRecurring.map((item) =>
+        item.id === rid
+          ? { ...item, titleSnapshot: label, startTimeSnapshotHhmm: startHhmm, endTimeSnapshotHhmm: endHhmm }
+          : item,
+      );
+      const templates = readRecurringTemplates();
+      const itemRow = bundle.dailyRecurring.find((item) => item.id === rid);
+      if (itemRow) {
+        const templateIndex = templates.findIndex((template) => template.id === itemRow.recurringTemplateId);
+        if (templateIndex !== -1) {
+          templates[templateIndex] = {
+            ...templates[templateIndex],
+            title: label,
+            startTimeHhmm: startHhmm,
+            endTimeHhmm: endHhmm,
+            estimatedPomodoros: null,
+          };
+          writeRecurringTemplates(templates);
+        }
+      }
+    }
+
     writeDayBundle(bundle);
     return { ok: true };
   },

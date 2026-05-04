@@ -156,10 +156,51 @@ describe("generatePlan", () => {
     );
   });
 
+  it("schedules three pomodoro cycles in a 90-minute recurring task window", () => {
+    const tasks: Task[] = [];
+    const fixedEvents: FixedEvent[] = [];
+    const recurringEvents: FixedEvent[] = [
+      {
+        id: "rec-3p",
+        dayPlanId: "day-1",
+        title: "Triple block",
+        startTimeIso: "2026-04-25T12:00:00",
+        endTimeIso: "2026-04-25T13:30:00",
+      },
+    ];
+
+    const result = generatePlan("2026-04-25", tasks, fixedEvents, "day-1", recurringEvents);
+    const recurringFocusBlocks = result.blocks.filter(
+      (block) => block.blockType === "focus" && block.sourceDailyRecurringId === "rec-3p",
+    );
+    expect(recurringFocusBlocks).toHaveLength(3);
+  });
+
+  it("adds recurring calendar events as a single recurring_event block (no pomodoro tiling)", () => {
+    const tasks: Task[] = [];
+    const fixedEvents: FixedEvent[] = [];
+    const recurringCalendar: FixedEvent[] = [
+      {
+        id: "cal-rec-1",
+        dayPlanId: "day-1",
+        title: "Lunch",
+        startTimeIso: "2026-04-25T12:30:00",
+        endTimeIso: "2026-04-25T13:00:00",
+      },
+    ];
+    const result = generatePlan("2026-04-25", tasks, fixedEvents, "day-1", [], recurringCalendar);
+    const lunch = result.blocks.find((block) => block.blockType === "recurring_event");
+    expect(lunch?.label).toBe("Lunch");
+    expect(lunch?.sourceDailyRecurringId).toBe("cal-rec-1");
+    expect(
+      result.blocks.filter((block) => block.sourceDailyRecurringId === "cal-rec-1" && block.blockType === "focus"),
+    ).toHaveLength(0);
+  });
+
   it("respects a custom day planning window", () => {
     const tasks = [makeTask("a", "Windowed work", 1)];
     const fixedEvents: FixedEvent[] = [];
-    const result = generatePlan("2026-04-25", tasks, fixedEvents, "day-1", [], {
+    const result = generatePlan("2026-04-25", tasks, fixedEvents, "day-1", [], [], {
       dayStartTimeHhmm: "10:00",
       dayEndTimeHhmm: "12:00",
     });

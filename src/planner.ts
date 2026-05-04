@@ -2,7 +2,8 @@ import type { FixedEvent, PlannerResult, ScheduleBlock, Task, UnscheduledTask } 
 
 const FOCUS_MINUTES = 25;
 const BREAK_MINUTES = 5;
-const FOCUS_SESSION_MINUTES = FOCUS_MINUTES + BREAK_MINUTES;
+/** One full pomodoro cycle (25 + 5 minutes); exported for recurring-task window math in dayStore. */
+export const FOCUS_SESSION_MINUTES = FOCUS_MINUTES + BREAK_MINUTES;
 
 interface Session {
   taskId: string;
@@ -85,6 +86,26 @@ function addFixedEventBlocks(fixedEvents: FixedEvent[], dayPlanId: string, block
         startTimeIso: event.startTimeIso,
         endTimeIso: event.endTimeIso,
         sequenceIndex: idx,
+        status: "planned",
+      });
+    });
+}
+
+function addRecurringCalendarEventBlocks(events: FixedEvent[], dayPlanId: string, blocks: ScheduleBlock[]): void {
+  events
+    .sort((a, b) => timeValue(a.startTimeIso) - timeValue(b.startTimeIso))
+    .forEach((event) => {
+      blocks.push({
+        id: crypto.randomUUID(),
+        dayPlanId,
+        sourceTaskId: null,
+        sourceDailyRecurringId: event.id,
+        sourceEventId: null,
+        blockType: "recurring_event",
+        label: event.title,
+        startTimeIso: event.startTimeIso,
+        endTimeIso: event.endTimeIso,
+        sequenceIndex: blocks.length + 1,
         status: "planned",
       });
     });
@@ -195,17 +216,19 @@ export function generatePlan(
   tasks: Task[],
   fixedEvents: FixedEvent[],
   dayPlanId: string,
-  recurringBlocks: FixedEvent[] = [],
+  recurringTaskWindows: FixedEvent[] = [],
+  recurringCalendarEvents: FixedEvent[] = [],
   window: PlannerWindow = {},
 ): PlannerResult {
   const plannedBlocks: ScheduleBlock[] = [];
   const unscheduledTasks: UnscheduledTask[] = [];
-  const busyEvents = [...fixedEvents, ...recurringBlocks];
+  const busyEvents = [...fixedEvents, ...recurringTaskWindows, ...recurringCalendarEvents];
   const freeWindows = buildWindows(dateIso, busyEvents, window);
   const taskSessions = expandSessions(tasks);
 
   addFixedEventBlocks(fixedEvents, dayPlanId, plannedBlocks);
-  addRecurringFocusBreakSessions(recurringBlocks, dayPlanId, plannedBlocks);
+  addRecurringCalendarEventBlocks(recurringCalendarEvents, dayPlanId, plannedBlocks);
+  addRecurringFocusBreakSessions(recurringTaskWindows, dayPlanId, plannedBlocks);
 
   for (const session of taskSessions) {
     scheduleFocusAndBreak(session, freeWindows, dayPlanId, plannedBlocks, unscheduledTasks);

@@ -21,6 +21,9 @@ export interface FixedEvent {
   endTimeIso: string;
 }
 
+/** Task windows become pomodoro focus/break sessions; calendar events are one block per day (e.g. Lunch). */
+export type RecurringTemplateKind = "task" | "calendar_event";
+
 export interface DailyRecurringItem {
   id: string;
   dayPlanId: string;
@@ -28,8 +31,11 @@ export interface DailyRecurringItem {
   titleSnapshot: string;
   startTimeSnapshotHhmm: string | null;
   endTimeSnapshotHhmm: string | null;
+  /** For `kind === "task"`: number of 25+5 focus/break cycles; for `calendar_event`, null. */
+  estimatedPomodoros: number | null;
   sortOrder: number;
   isCompleted: boolean;
+  kind: RecurringTemplateKind;
 }
 
 export type RecurringEditScope = "today" | "template";
@@ -44,14 +50,20 @@ export interface RecurringTemplate {
   title: string;
   startTimeHhmm: string | null;
   endTimeHhmm: string | null;
+  /** For `kind === "task"`: pomodoro count (1–5); for `calendar_event`, null. */
+  estimatedPomodoros: number | null;
   sortOrder: number;
   isActive: boolean;
+  kind: RecurringTemplateKind;
 }
 
 export interface RecurringTemplateInput {
   title: string;
   startTimeHhmm?: string | null;
   endTimeHhmm?: string | null;
+  kind?: RecurringTemplateKind;
+  /** Required for `kind === "task"` when creating/updating from the UI. */
+  estimatedPomodoros?: number;
 }
 
 export interface RecurringUpdate {
@@ -60,6 +72,7 @@ export interface RecurringUpdate {
   titleSnapshot?: string;
   startTimeHhmm?: string;
   endTimeHhmm?: string;
+  estimatedPomodoros?: number;
   editScope?: RecurringEditScope;
 }
 

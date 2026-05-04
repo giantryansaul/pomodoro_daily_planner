@@ -140,6 +140,20 @@ body {
   margin: 0 0 0.75rem;
 }
 
+.panel-subheader {
+  margin: -0.35rem 0 0.85rem;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: #475569;
+  font-weight: 600;
+}
+
+.timer-card-title-with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
 .execution {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--schedule-rail-width);
@@ -392,6 +406,36 @@ ol {
   border-radius: 14px;
 }
 
+.task-entry-pomodoro-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.task-entry-pomodoro-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.task-pomodoro-apple-lead {
+  flex-shrink: 0;
+  color: #b91c1c;
+}
+
+.task-entry-title-input {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.task-entry-remove {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 .pomodoro-picker {
   display: inline-flex;
   gap: 0.25rem;
@@ -424,6 +468,36 @@ ol {
 .pomodoro-picker input:checked + span {
   background: var(--type-focus-deep);
   color: white;
+}
+
+.pomodoro-picker-apple {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+}
+
+.pomodoro-picker-apple input:checked + span {
+  background: #dc2626;
+  border: 1px solid #b91c1c;
+  color: white;
+}
+
+.recurring-entry {
+  width: 100%;
+}
+
+.recurring-entry-finished input,
+.recurring-entry-finished select {
+  background: #e8ecf3;
+  border-color: #cbd5e1;
+}
+
+.recurring-title-input.is-line-through {
+  text-decoration: line-through;
+  color: #334155;
+}
+
+.recurring-row-delete {
+  margin-left: auto;
 }
 
 .muted {
@@ -666,6 +740,18 @@ ol {
 .calendar-block-header strong {
   flex: 0 0 auto;
   font-size: 0.82rem;
+}
+
+.calendar-block-time-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.calendar-time-apple {
+  flex-shrink: 0;
+  color: currentColor;
+  opacity: 0.9;
 }
 
 .calendar-title-row {
