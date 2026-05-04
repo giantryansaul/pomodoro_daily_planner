@@ -27,3 +27,4 @@ coverage
 # Cursor
 .cursor/plans/
 .cursor/*.log
+.vercel
