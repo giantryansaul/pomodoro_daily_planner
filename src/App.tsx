@@ -1,11 +1,10 @@
-import { Apple, Check, Coffee, Minus, Pause, Pencil, Play, Plus, RotateCcw, Save, SkipForward, Trash2, X } from "lucide-react";
+import { Apple, Check, Coffee, Minus, Pause, Pencil, Play, Plus, Repeat, RotateCcw, SkipForward, Trash2, X } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FOCUS_SESSION_MINUTES } from "./planner";
 import { dayStore } from "./dayStore";
 import type { DayBoundaryDefaults, RecurringTemplateKind, ScheduleBlock as Block, TaskStatus, TimerSession } from "./types";
 
-type AppMode = "editing" | "timeline";
 type TaskInput = {
   clientId: string;
   serverId?: string;
@@ -24,9 +23,7 @@ type RecurringItemTimed = {
   sortOrder: number;
   kind: RecurringTemplateKind;
 };
-type EventInput = { clientId: string; title: string; startTime: string; endTime: string };
-type RecurringTaskDraft = { title: string; startTime: string; estimatedPomodoros: number };
-type RecurringCalendarDraft = { title: string; startTime: string; endTime: string };
+type EventInput = { clientId: string; serverId?: string; title: string; startTime: string; endTime: string };
 type CalendarItem = {
   id: string;
   block: Block;
@@ -40,7 +37,7 @@ type TimelineEditDraft = {
   startTime: string;
   endTime: string;
 };
-type TimerCardVariant = "planning" | Block["blockType"] | "empty" | "recurring_focus";
+type TimerCardVariant = Block["blockType"] | "empty" | "recurring_focus";
 type TimerCardProps = {
   title: ReactNode;
   variant: TimerCardVariant;
@@ -54,7 +51,6 @@ type TimerCardProps = {
 };
 
 const today = new Date().toISOString().slice(0, 10);
-const PLANNING_TIMER_SECONDS = 10 * 60;
 const DEFAULT_DAY_START_TIME = "07:00";
 const DEFAULT_DAY_END_TIME = "19:00";
 const DEFAULT_RECURRING_START_TIME = "07:00";
@@ -482,29 +478,9 @@ function normalizeRecurring(items: Array<{
 }
 
 function App() {
-  const [mode, setMode] = useState<AppMode>("editing");
-  const [planningSecondsLeft, setPlanningSecondsLeft] = useState(PLANNING_TIMER_SECONDS);
-  const [planningTimerRunning, setPlanningTimerRunning] = useState(false);
   const [tasks, setTasks] = useState<TaskInput[]>([]);
-  const [taskDraft, setTaskDraft] = useState("");
   const [recurring, setRecurring] = useState<RecurringItemTimed[]>([]);
   const [events, setEvents] = useState<EventInput[]>([]);
-  const [eventDraft, setEventDraft] = useState<EventInput>({
-    clientId: newClientId(),
-    title: "",
-    startTime: "09:00",
-    endTime: "09:30",
-  });
-  const [recurringDraft, setRecurringDraft] = useState<RecurringTaskDraft>({
-    title: "",
-    startTime: DEFAULT_RECURRING_START_TIME,
-    estimatedPomodoros: 1,
-  });
-  const [recurringCalendarDraft, setRecurringCalendarDraft] = useState<RecurringCalendarDraft>({
-    title: "",
-    startTime: DEFAULT_RECURRING_CALENDAR_START_TIME,
-    endTime: DEFAULT_RECURRING_CALENDAR_END_TIME,
-  });
   const [timeline, setTimeline] = useState<Block[]>([]);
   const [timer, setTimer] = useState<TimerSession | null>(null);
   const [dayStartTime, setDayStartTime] = useState(DEFAULT_DAY_START_TIME);
@@ -537,7 +513,6 @@ function App() {
     title: string;
     estimatedPomodoros: number;
   } | null>(null);
-
   const orderedTimeline = useMemo(() => sortByStartTime(timeline), [timeline]);
   const firstRunnableBlock = useMemo(
     () => orderedTimeline.find((block) => !isNonPomodoroTimelineBlock(block) && block.status !== "completed"),
@@ -571,12 +546,6 @@ function App() {
   const displayedBlockDurationSeconds = durationInSeconds(displayedBlock);
   const displayedElapsedSeconds = activeBlock ? (timer?.elapsedSeconds ?? 0) : 0;
   const remainingSeconds = Math.max(displayedBlockDurationSeconds - displayedElapsedSeconds, 0);
-  const planningProgressPercent = Math.min(((PLANNING_TIMER_SECONDS - planningSecondsLeft) / PLANNING_TIMER_SECONDS) * 100, 100);
-  const planningState =
-    planningSecondsLeft === 0 ? "completed"
-      : planningTimerRunning ? "running"
-        : planningSecondsLeft === PLANNING_TIMER_SECONDS ? "idle"
-          : "paused";
   const timerProgressPercent =
     displayedBlockDurationSeconds > 0 ? Math.min((displayedElapsedSeconds / displayedBlockDurationSeconds) * 100, 100) : 0;
   const timerAlmostDone = displayedBlockDurationSeconds > 0 && remainingSeconds <= displayedBlockDurationSeconds * 0.2;
@@ -585,11 +554,6 @@ function App() {
     () => TIME_OPTIONS.filter((time) => parseHhmmToMinutes(time) > parseHhmmToMinutes(dayStartTime)),
     [dayStartTime],
   );
-  const recurringCalendarDraftEndOptions = useMemo(
-    () => eventEndTimeOptions(recurringCalendarDraft.startTime),
-    [recurringCalendarDraft.startTime],
-  );
-  const eventDraftEndOptions = useMemo(() => eventEndTimeOptions(eventDraft.startTime), [eventDraft.startTime]);
 
   useEffect(() => {
     if (parseHhmmToMinutes(dayEndTime) > parseHhmmToMinutes(dayStartTime)) return;
@@ -598,24 +562,15 @@ function App() {
     }
   }, [dayEndOptions, dayEndTime, dayStartTime]);
 
-  useEffect(() => {
-    const opts = eventEndTimeOptions(recurringCalendarDraft.startTime);
-    if (opts.includes(recurringCalendarDraft.endTime)) return;
-    if (opts.length > 0) {
-      setRecurringCalendarDraft((current) => ({
-        ...current,
-        endTime: clampEventEndTime(current.startTime, current.endTime),
-      }));
-    }
-  }, [recurringCalendarDraft.endTime, recurringCalendarDraft.startTime]);
-
   const calendarBounds = useMemo(() => {
     const blockStarts = orderedTimeline.map((block) => minutesFromDayStart(block.startTimeIso));
     const blockEnds = orderedTimeline.map((block) => minutesFromDayStart(block.endTimeIso));
     const selectedStartMinutes = parseHhmmToMinutes(dayStartTime);
     const selectedEndMinutes = parseHhmmToMinutes(dayEndTime);
-    const startHour = Math.min(Math.floor(selectedStartMinutes / 60), Math.floor(Math.min(...blockStarts, selectedStartMinutes) / 60));
-    const endHour = Math.max(Math.ceil(selectedEndMinutes / 60), Math.ceil(Math.max(...blockEnds, selectedEndMinutes) / 60));
+    const minBlockStart = blockStarts.length > 0 ? Math.min(...blockStarts) : selectedStartMinutes;
+    const maxBlockEnd = blockEnds.length > 0 ? Math.max(...blockEnds) : selectedEndMinutes;
+    const startHour = Math.min(Math.floor(selectedStartMinutes / 60), Math.floor(Math.min(minBlockStart, selectedStartMinutes) / 60));
+    const endHour = Math.max(Math.ceil(selectedEndMinutes / 60), Math.ceil(Math.max(maxBlockEnd, selectedEndMinutes) / 60));
     const clampedEndHour = Math.max(startHour + 1, endHour);
     return { startHour, endHour: clampedEndHour, totalMinutes: (clampedEndHour - startHour) * 60 };
   }, [dayEndTime, dayStartTime, orderedTimeline]);
@@ -632,17 +587,13 @@ function App() {
 
   useEffect(() => {
     const timerId = window.setInterval(() => {
-      setPlanningSecondsLeft((current) => {
-        if (!planningTimerRunning) return current;
-        return current > 0 ? current - 1 : 0;
-      });
       setTimer((current) => {
         if (!current || current.state !== "running" || !current.activeBlockId) return current;
         return { ...current, elapsedSeconds: current.elapsedSeconds + 1 };
       });
     }, 1000);
     return () => window.clearInterval(timerId);
-  }, [planningTimerRunning]);
+  }, []);
 
   const loadDay = useCallback(async (): Promise<void> => {
     const [tasksData, recurringData, eventsData, timelineData, timerData, defaultsData] = await Promise.all([
@@ -653,6 +604,11 @@ function App() {
       dayStore.getTimerSession(today),
       dayStore.getDayBoundaryDefaults(),
     ]);
+
+    const dayStart = defaultsData.dayStartTimeHhmm ?? DEFAULT_DAY_START_TIME;
+    const dayEnd = defaultsData.dayEndTimeHhmm ?? DEFAULT_DAY_END_TIME;
+    setDayStartTime(dayStart);
+    setDayEndTime(dayEnd);
 
     setTasks(
       tasksData.tasks.map((task) => ({
@@ -667,17 +623,50 @@ function App() {
     setEvents(
       eventsData.events.map((event) => ({
         clientId: newClientId(),
+        serverId: event.id,
         title: event.title,
         startTime: event.startTimeIso.slice(11, 16),
         endTime: event.endTimeIso.slice(11, 16),
       })),
     );
-    const loadedTimeline = sortByStartTime(timelineData.blocks);
-    setTimeline(loadedTimeline);
-    setTimer(timerData.session);
-    setDayStartTime(defaultsData.dayStartTimeHhmm ?? DEFAULT_DAY_START_TIME);
-    setDayEndTime(defaultsData.dayEndTimeHhmm ?? DEFAULT_DAY_END_TIME);
-    setMode(loadedTimeline.length > 0 ? "timeline" : "editing");
+
+    let nextTimeline = sortByStartTime(timelineData.blocks);
+    let nextTimerSession = timerData.session;
+    if (nextTimeline.length === 0) {
+      const planData = await dayStore.generatePlan(today, { dayStartTimeHhmm: dayStart, dayEndTimeHhmm: dayEnd });
+      setUnscheduledCount(planData.unscheduledTasks.length);
+      const [timelineReload, tasksReload, recurringReload, eventsReload, timerReload] = await Promise.all([
+        dayStore.getTimeline(today),
+        dayStore.getTasks(today),
+        dayStore.getRecurring(today),
+        dayStore.getEvents(today),
+        dayStore.getTimerSession(today),
+      ]);
+      nextTimeline = sortByStartTime(timelineReload.blocks);
+      setTasks(
+        tasksReload.tasks.map((task) => ({
+          clientId: newClientId(),
+          serverId: task.id,
+          title: task.title,
+          estimatedPomodoros: task.estimatedPomodoros ?? undefined,
+          status: task.status,
+        })),
+      );
+      setRecurring(normalizeRecurring(recurringReload.recurring));
+      setEvents(
+        eventsReload.events.map((event) => ({
+          clientId: newClientId(),
+          serverId: event.id,
+          title: event.title,
+          startTime: event.startTimeIso.slice(11, 16),
+          endTime: event.endTimeIso.slice(11, 16),
+        })),
+      );
+      nextTimerSession = timerReload.session;
+    }
+
+    setTimeline(nextTimeline);
+    setTimer(nextTimerSession);
     setLoading(false);
   }, []);
 
@@ -708,14 +697,18 @@ function App() {
 
   const refreshEventsFromStore = useCallback(async (): Promise<void> => {
     const ev = await dayStore.getEvents(today);
-    setEvents(
-      ev.events.map((event) => ({
-        clientId: newClientId(),
+    setEvents((prev) => {
+      const clientIdByServerId = new Map(
+        prev.filter((e) => e.serverId).map((e) => [e.serverId as string, e.clientId]),
+      );
+      return ev.events.map((event) => ({
+        clientId: clientIdByServerId.get(event.id) ?? newClientId(),
+        serverId: event.id,
         title: event.title,
         startTime: event.startTimeIso.slice(11, 16),
         endTime: event.endTimeIso.slice(11, 16),
-      })),
-    );
+      }));
+    });
   }, []);
 
   const calendarNowLineStyle = useMemo((): CSSProperties | null => {
@@ -747,48 +740,6 @@ function App() {
     void persistDayBoundaryDefaults({ dayStartTimeHhmm: dayStartTime, dayEndTimeHhmm: nextEndTime });
   }
 
-  async function saveDay(): Promise<void> {
-    await dayStore.replaceTasks(today, tasks.map(({ title, estimatedPomodoros }) => ({ title, estimatedPomodoros })));
-
-    await dayStore.updateRecurring(
-      today,
-      recurring.map((item) => ({
-        id: item.id,
-        isCompleted: item.isCompleted,
-        titleSnapshot: item.titleSnapshot,
-        startTimeHhmm: item.startTimeSnapshotHhmm ?? undefined,
-        ...(item.kind === "calendar_event"
-          ? { endTimeHhmm: item.endTimeSnapshotHhmm ?? undefined }
-          : { estimatedPomodoros: clampRecurringPomosForUi(item.estimatedPomodoros) }),
-      })),
-    );
-
-    await dayStore.replaceEvents(
-      today,
-      events.map((event) => ({
-        title: event.title,
-        startTimeIso: `${today}T${event.startTime}:00`,
-        endTimeIso: `${today}T${event.endTime}:00`,
-      })),
-    );
-
-    const planData = await dayStore.generatePlan(today, { dayStartTimeHhmm: dayStartTime, dayEndTimeHhmm: dayEndTime });
-    setUnscheduledCount(planData.unscheduledTasks.length);
-    const [timelineData, tasksAfterSave] = await Promise.all([dayStore.getTimeline(today), dayStore.getTasks(today)]);
-    const regeneratedTimeline = sortByStartTime(timelineData.blocks);
-    setTimeline(regeneratedTimeline);
-    setTasks(
-      tasksAfterSave.tasks.map((task) => ({
-        clientId: newClientId(),
-        serverId: task.id,
-        title: task.title,
-        estimatedPomodoros: task.estimatedPomodoros ?? undefined,
-        status: task.status,
-      })),
-    );
-    setMode("timeline");
-  }
-
   async function runDayRebuild(endpoint: "generate-plan" | "reset-and-generate"): Promise<void> {
     const plannerWindow = { dayStartTimeHhmm: dayStartTime, dayEndTimeHhmm: dayEndTime };
     const planData =
@@ -805,8 +756,8 @@ function App() {
     setRecurring(normalizeRecurring(recurringData.recurring));
     setTimer(timerData.session);
     await refreshTasksFromStore();
+    await refreshEventsFromStore();
     setEditingTimelineBlockId(null);
-    setMode("timeline");
   }
 
   async function regenerateTimeline(): Promise<void> {
@@ -830,7 +781,36 @@ function App() {
     setTimer(clearData.session);
     setUnscheduledCount(0);
     setEditingTimelineBlockId(null);
-    setMode("editing");
+    const planData = await dayStore.generatePlan(today, { dayStartTimeHhmm: dayStartTime, dayEndTimeHhmm: dayEndTime });
+    setUnscheduledCount(planData.unscheduledTasks.length);
+    const [timelineData, tasksReload, recurringReload, eventsReload, timerReload] = await Promise.all([
+      dayStore.getTimeline(today),
+      dayStore.getTasks(today),
+      dayStore.getRecurring(today),
+      dayStore.getEvents(today),
+      dayStore.getTimerSession(today),
+    ]);
+    setTimeline(sortByStartTime(timelineData.blocks));
+    setTasks(
+      tasksReload.tasks.map((task) => ({
+        clientId: newClientId(),
+        serverId: task.id,
+        title: task.title,
+        estimatedPomodoros: task.estimatedPomodoros ?? undefined,
+        status: task.status,
+      })),
+    );
+    setRecurring(normalizeRecurring(recurringReload.recurring));
+    setEvents(
+      eventsReload.events.map((event) => ({
+        clientId: newClientId(),
+        serverId: event.id,
+        title: event.title,
+        startTime: event.startTimeIso.slice(11, 16),
+        endTime: event.endTimeIso.slice(11, 16),
+      })),
+    );
+    setTimer(timerReload.session);
   }
 
   async function persistTimer(next: TimerSession): Promise<void> {
@@ -1027,61 +1007,122 @@ function App() {
     setTimelineEditDraft({ label: "", startTime: "", endTime: "" });
   }
 
-  function addTask(): void {
-    const title = taskDraft.trim();
-    if (!title) return;
-    setTasks((current) => [...current, { clientId: newClientId(), title }]);
-    setTaskDraft("");
-  }
-
-  function updateTask(clientId: string, updates: Partial<TaskInput>): void {
-    setTasks((current) => current.map((task) => (task.clientId === clientId ? { ...task, ...updates } : task)));
-  }
-
-  function deleteTask(clientId: string): void {
-    setTasks((current) => current.filter((task) => task.clientId !== clientId));
-  }
-
-  function addEvent(): void {
-    if (!eventDraft.title.trim()) return;
-    setEvents((current) => [...current, eventDraft]);
-    setEventDraft({ clientId: newClientId(), title: "", startTime: "09:00", endTime: "09:30" });
-  }
-
-  async function addRecurringTemplate(): Promise<void> {
-    const title = recurringDraft.title.trim();
-    if (!title) return;
-    const response = await dayStore.createRecurringTemplateForDay(today, {
-      title,
-      startTimeHhmm: recurringDraft.startTime,
-      estimatedPomodoros: recurringDraft.estimatedPomodoros,
-      kind: "task",
+  async function promoteAdhocTaskToRecurring(serverId: string): Promise<void> {
+    const res = await dayStore.promoteTaskToRecurringTemplate(today, serverId, {
+      dayStartTimeHhmm: dayStartTime,
+      dayEndTimeHhmm: dayEndTime,
     });
-    if (!response.ok || !response.recurring) return;
-    setRecurring(normalizeRecurring(response.recurring));
-    setRecurringDraft({
-      title: "",
-      startTime: recurringDraft.startTime,
-      estimatedPomodoros: recurringDraft.estimatedPomodoros,
-    });
+    if (!res.ok || !res.result) return;
+    setUnscheduledCount(res.result.unscheduledTasks.length);
+    await refreshTasksFromStore();
+    await refreshTimelineAndRelated();
   }
 
-  async function addRecurringCalendarTemplate(): Promise<void> {
-    const title = recurringCalendarDraft.title.trim();
-    if (!title) return;
-    const response = await dayStore.createRecurringTemplateForDay(today, {
-      title,
-      startTimeHhmm: recurringCalendarDraft.startTime,
-      endTimeHhmm: recurringCalendarDraft.endTime,
-      kind: "calendar_event",
+  async function removeAdhocTask(serverId: string): Promise<void> {
+    const res = await dayStore.removeTaskById(today, serverId, {
+      dayStartTimeHhmm: dayStartTime,
+      dayEndTimeHhmm: dayEndTime,
     });
-    if (!response.ok || !response.recurring) return;
-    setRecurring(normalizeRecurring(response.recurring));
-    setRecurringCalendarDraft({
-      title: "",
-      startTime: recurringCalendarDraft.startTime,
-      endTime: recurringCalendarDraft.endTime,
+    if (!res.ok || !res.result) return;
+    setUnscheduledCount(res.result.unscheduledTasks.length);
+    await refreshTasksFromStore();
+    await refreshTimelineAndRelated();
+  }
+
+  async function promoteFixedEventToRecurring(eventId: string): Promise<void> {
+    const res = await dayStore.promoteFixedEventToRecurringTemplate(today, eventId, {
+      dayStartTimeHhmm: dayStartTime,
+      dayEndTimeHhmm: dayEndTime,
     });
+    if (!res.ok || !res.result) return;
+    setUnscheduledCount(res.result.unscheduledTasks.length);
+    await refreshEventsFromStore();
+    await refreshTimelineAndRelated();
+    await refreshTasksFromStore();
+  }
+
+  async function demoteRecurringTaskRow(dailyRecurringId: string): Promise<void> {
+    const res = await dayStore.demoteRecurringTaskToOneOff(today, dailyRecurringId, {
+      dayStartTimeHhmm: dayStartTime,
+      dayEndTimeHhmm: dayEndTime,
+    });
+    if (!res.ok || !res.result) return;
+    setUnscheduledCount(res.result.unscheduledTasks.length);
+    await refreshTasksFromStore();
+    await refreshTimelineAndRelated();
+  }
+
+  async function demoteRecurringCalendarRow(dailyRecurringId: string): Promise<void> {
+    const res = await dayStore.demoteRecurringCalendarToOneOff(today, dailyRecurringId, {
+      dayStartTimeHhmm: dayStartTime,
+      dayEndTimeHhmm: dayEndTime,
+    });
+    if (!res.ok || !res.result) return;
+    setUnscheduledCount(res.result.unscheduledTasks.length);
+    await refreshEventsFromStore();
+    await refreshTimelineAndRelated();
+  }
+
+  async function removeFixedEventRow(serverId: string): Promise<void> {
+    const res = await dayStore.removeFixedEventById(today, serverId, {
+      dayStartTimeHhmm: dayStartTime,
+      dayEndTimeHhmm: dayEndTime,
+    });
+    if (!res.ok || !res.result) return;
+    setUnscheduledCount(res.result.unscheduledTasks.length);
+    await refreshEventsFromStore();
+    await refreshTimelineAndRelated();
+  }
+
+  async function removeCalendarBlock(block: Block): Promise<void> {
+    if (block.sourceTaskId) {
+      const res = await dayStore.removeTaskById(today, block.sourceTaskId, {
+        dayStartTimeHhmm: dayStartTime,
+        dayEndTimeHhmm: dayEndTime,
+      });
+      if (!res.ok || !res.result) return;
+      setUnscheduledCount(res.result.unscheduledTasks.length);
+      await refreshTasksFromStore();
+      await refreshTimelineAndRelated();
+      return;
+    }
+    if (block.sourceEventId) {
+      const res = await dayStore.removeFixedEventById(today, block.sourceEventId, {
+        dayStartTimeHhmm: dayStartTime,
+        dayEndTimeHhmm: dayEndTime,
+      });
+      if (!res.ok || !res.result) return;
+      setUnscheduledCount(res.result.unscheduledTasks.length);
+      await refreshEventsFromStore();
+      await refreshTimelineAndRelated();
+      await refreshTasksFromStore();
+      return;
+    }
+    if (block.sourceDailyRecurringId) {
+      const row = recurring.find((r) => r.id === block.sourceDailyRecurringId);
+      if (!row) return;
+      await deleteRecurringTemplateForItem(row.recurringTemplateId, row.titleSnapshot);
+    }
+  }
+
+  async function handleCalendarRepeatClick(block: Block): Promise<void> {
+    if (block.blockType === "fixed_event" && block.sourceEventId) {
+      await promoteFixedEventToRecurring(block.sourceEventId);
+      return;
+    }
+    if (block.blockType === "focus" && block.sourceTaskId && !block.sourceDailyRecurringId) {
+      await promoteAdhocTaskToRecurring(block.sourceTaskId);
+      return;
+    }
+    if (block.sourceDailyRecurringId || block.blockType === "recurring_event") {
+      const row = recurring.find((r) => r.id === block.sourceDailyRecurringId);
+      if (!row) return;
+      if (row.kind === "calendar_event") {
+        await demoteRecurringCalendarRow(row.id);
+      } else {
+        await demoteRecurringTaskRow(row.id);
+      }
+    }
   }
 
   async function setTimelineTaskCompletion(serverId: string, completed: boolean): Promise<void> {
@@ -1181,101 +1222,7 @@ function App() {
     setTimeline(sortByStartTime(timelineData.blocks));
     setTimer(timerData.session);
     await refreshTasksFromStore();
-  }
-
-  function updateEvent(clientId: string, updates: Partial<EventInput>): void {
-    setEvents((current) => current.map((event) => (event.clientId === clientId ? { ...event, ...updates } : event)));
-  }
-
-  function handleEventDraftStartChange(nextStartTime: string): void {
-    setEventDraft((current) => {
-      const durationMinutes = durationMinutesFromRange(current.startTime, current.endTime);
-      const rawEnd = formatMinutesToHhmm(parseHhmmToMinutes(nextStartTime) + durationMinutes);
-      return {
-        ...current,
-        startTime: nextStartTime,
-        endTime: clampEventEndTime(nextStartTime, rawEnd),
-      };
-    });
-  }
-
-  function handleEventStartChange(clientId: string, nextStartTime: string): void {
-    setEvents((current) =>
-      current.map((event) => {
-        if (event.clientId !== clientId) return event;
-        const durationMinutes = durationMinutesFromRange(event.startTime, event.endTime);
-        const rawEnd = formatMinutesToHhmm(parseHhmmToMinutes(nextStartTime) + durationMinutes);
-        return {
-          ...event,
-          startTime: nextStartTime,
-          endTime: clampEventEndTime(nextStartTime, rawEnd),
-        };
-      }),
-    );
-  }
-
-  function handleRecurringTaskStartChange(itemId: string, nextStartTime: string): void {
-    const entry = recurring.find((e) => e.id === itemId);
-    if (!entry || entry.kind === "calendar_event") return;
-    const pomos = clampRecurringPomosForUi(entry.estimatedPomodoros);
-    const merged: RecurringItemTimed = {
-      ...entry,
-      startTimeSnapshotHhmm: nextStartTime,
-      endTimeSnapshotHhmm: recurringTaskEndFromStart(nextStartTime, pomos),
-      estimatedPomodoros: pomos,
-    };
-    setRecurring((current) => current.map((e) => (e.id === itemId ? merged : e)));
-    void dayStore.updateRecurring(today, [
-      {
-        id: merged.id,
-        isCompleted: merged.isCompleted,
-        titleSnapshot: merged.titleSnapshot,
-        startTimeHhmm: merged.startTimeSnapshotHhmm ?? undefined,
-        estimatedPomodoros: pomos,
-      },
-    ]);
-  }
-
-  function handleRecurringCalendarStartChange(itemId: string, nextStartTime: string): void {
-    const entry = recurring.find((e) => e.id === itemId);
-    if (!entry) return;
-    const currentStart = entry.startTimeSnapshotHhmm ?? DEFAULT_RECURRING_CALENDAR_START_TIME;
-    const currentEnd = entry.endTimeSnapshotHhmm ?? DEFAULT_RECURRING_CALENDAR_END_TIME;
-    const durationMinutes = durationMinutesFromRange(currentStart, currentEnd);
-    const rawEnd = formatMinutesToHhmm(parseHhmmToMinutes(nextStartTime) + durationMinutes);
-    const merged: RecurringItemTimed = {
-      ...entry,
-      startTimeSnapshotHhmm: nextStartTime,
-      endTimeSnapshotHhmm: clampEventEndTime(nextStartTime, rawEnd),
-    };
-    setRecurring((current) => current.map((e) => (e.id === itemId ? merged : e)));
-    void dayStore.updateRecurring(today, [
-      {
-        id: merged.id,
-        isCompleted: merged.isCompleted,
-        titleSnapshot: merged.titleSnapshot,
-        startTimeHhmm: merged.startTimeSnapshotHhmm ?? undefined,
-        endTimeHhmm: merged.endTimeSnapshotHhmm ?? undefined,
-      },
-    ]);
-  }
-
-  function deleteEvent(clientId: string): void {
-    setEvents((current) => current.filter((event) => event.clientId !== clientId));
-  }
-
-  function startPlanningTimer(): void {
-    if (planningSecondsLeft === 0) return;
-    setPlanningTimerRunning(true);
-  }
-
-  function pausePlanningTimer(): void {
-    setPlanningTimerRunning(false);
-  }
-
-  function resetPlanningTimer(): void {
-    setPlanningTimerRunning(false);
-    setPlanningSecondsLeft(PLANNING_TIMER_SECONDS);
+    await refreshEventsFromStore();
   }
 
   function calendarItemStyle(item: CalendarItem): CSSProperties {
@@ -1600,560 +1547,39 @@ function App() {
         <div className="weekday-badge">{dateParts.weekday}</div>
       </header>
 
-      {mode === "editing" && (
-        <section className="editing-layout">
-          <div>
-            <div className="section-heading">
-              <div className="planning-heading">
-                <h2>Plan the Day</h2>
-                <p>Add work, eliminate recurring items, and block calendar events before saving the timeline.</p>
-              </div>
-              <div className="section-actions">
-                <button onClick={() => void clearDay()}>
-                  <RotateCcw size={18} aria-hidden="true" />
-                  <span>Clear Day</span>
-                </button>
-                <button onClick={() => void saveDay()}>
-                  <Save size={18} aria-hidden="true" />
-                  <span>Save Day</span>
-                </button>
-              </div>
-            </div>
-            <section className="day-boundary-controls panel">
-              <div className="day-boundary-fields">
-                <label>
-                  <span>Day Start</span>
-                  <select value={dayStartTime} onChange={(event) => handleDayStartTimeChange(event.target.value)} aria-label="Day start time">
-                    {TIME_OPTIONS.map((time) => (
-                      <option key={time} value={time}>{formatSelectTime(time)}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  <span>Day End</span>
-                  <select value={dayEndTime} onChange={(event) => handleDayEndTimeChange(event.target.value)} aria-label="Day end time">
-                    {dayEndOptions.map((time) => (
-                      <option key={time} value={time}>{formatSelectTime(time)}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            </section>
-
-            <div className="edit-panels">
-              <div className="panel">
-                <h3>Add Tasks</h3>
-                <div className="add-card">
-                  <input value={taskDraft} onChange={(event) => setTaskDraft(event.target.value)} placeholder="Important task" />
-                  <button onClick={addTask} aria-label="Add task" title="Add task">
-                    <Plus size={18} aria-hidden="true" />
-                  </button>
-                </div>
-                <ol className="editable-list">
-                  {tasks.map((task) => (
-                    <li key={task.clientId}>
-                      <div className="item-row task-entry task-entry-pomodoro-row">
-                        <input
-                          className="task-entry-title-input"
-                          value={task.title}
-                          onChange={(event) => updateTask(task.clientId, { title: event.target.value })}
-                          aria-label="Task title"
-                        />
-                        <div className="task-entry-pomodoro-group">
-                          <Apple size={18} className="task-pomodoro-apple-lead" aria-hidden="true" />
-                          <div className="pomodoro-picker pomodoro-picker-apple" aria-label="Estimated Pomodoros">
-                            {POMODORO_OPTIONS.map((count) => (
-                              <label key={count}>
-                                <input
-                                  type="radio"
-                                  name={`pomodoros-${task.clientId}`}
-                                  checked={(task.estimatedPomodoros ?? 1) === count}
-                                  onChange={() => updateTask(task.clientId, { estimatedPomodoros: count })}
-                                />
-                                <span>{count}</span>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          className="task-entry-remove"
-                          onClick={() => deleteTask(task.clientId)}
-                          aria-label="Remove task"
-                          title="Remove task"
-                        >
-                          <Minus size={18} aria-hidden="true" />
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ol>
-              </div>
-
-              <div className="panel">
-                <h3>Recurring Tasks</h3>
-                <p className="panel-subheader">
-                  These tasks happen every day and will automatically be included in the next day&apos;s plan.
-                </p>
-                <div className="add-card recurring-add-card">
-                  <input
-                    value={recurringDraft.title}
-                    onChange={(event) => setRecurringDraft((current) => ({ ...current, title: event.target.value }))}
-                    placeholder="New recurring task"
-                    aria-label="New recurring task title"
-                  />
-                  <select
-                    value={recurringDraft.startTime}
-                    onChange={(event) =>
-                      setRecurringDraft((current) => ({ ...current, startTime: event.target.value }))
-                    }
-                    aria-label="New recurring start time"
-                  >
-                    {TIME_OPTIONS.map((time) => (
-                      <option key={time} value={time}>{formatSelectTime(time)}</option>
-                    ))}
-                  </select>
-                  <div className="task-entry-pomodoro-group recurring-task-draft-pomos">
-                    <Apple size={18} className="task-pomodoro-apple-lead" aria-hidden="true" />
-                    <div className="pomodoro-picker pomodoro-picker-apple" aria-label="Estimated Pomodoros for recurring task">
-                      {POMODORO_OPTIONS.map((count) => (
-                        <label key={count}>
-                          <input
-                            type="radio"
-                            name="recurring-draft-pomodoros"
-                            checked={recurringDraft.estimatedPomodoros === count}
-                            onChange={() =>
-                              setRecurringDraft((current) => ({ ...current, estimatedPomodoros: count }))
-                            }
-                          />
-                          <span>{count}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                  <button onClick={() => void addRecurringTemplate()} aria-label="Add recurring task default" title="Add recurring task default">
-                    <Plus size={18} aria-hidden="true" />
-                  </button>
-                </div>
-                <ul className="editable-list">
-                  {recurringTaskRows.map((item) => (
-                    <li key={item.id}>
-                      <div
-                        className={`edit-row recurring-entry${item.isCompleted ? " recurring-entry-finished" : ""}`}
-                      >
-                        <input
-                          className={`recurring-title-input${item.isCompleted ? " is-line-through" : ""}`}
-                          value={item.titleSnapshot}
-                          onChange={(event) =>
-                            setRecurring((current) =>
-                              current.map((entry) => (entry.id === item.id ? { ...entry, titleSnapshot: event.target.value } : entry)),
-                            )
-                          }
-                          onBlur={(event) => {
-                            const title = event.target.value.trim();
-                            const pomos = clampRecurringPomosForUi(item.estimatedPomodoros);
-                            const startH = item.startTimeSnapshotHhmm ?? DEFAULT_RECURRING_START_TIME;
-                            const merged: RecurringItemTimed = {
-                              ...item,
-                              titleSnapshot: title,
-                              estimatedPomodoros: pomos,
-                              endTimeSnapshotHhmm: recurringTaskEndFromStart(startH, pomos),
-                            };
-                            setRecurring((current) =>
-                              current.map((entry) => (entry.id === item.id ? merged : entry)),
-                            );
-                            void dayStore.updateRecurring(today, [
-                              {
-                                id: merged.id,
-                                isCompleted: merged.isCompleted,
-                                titleSnapshot: merged.titleSnapshot,
-                                startTimeHhmm: merged.startTimeSnapshotHhmm ?? undefined,
-                                estimatedPomodoros: pomos,
-                              },
-                            ]);
-                          }}
-                          aria-label="Recurring task title"
-                        />
-                        <select
-                          value={item.startTimeSnapshotHhmm ?? "07:00"}
-                          onChange={(event) => handleRecurringTaskStartChange(item.id, event.target.value)}
-                          aria-label="Recurring start time"
-                        >
-                          {TIME_OPTIONS.map((time) => (
-                            <option key={time} value={time}>{formatSelectTime(time)}</option>
-                          ))}
-                        </select>
-                        <div className="task-entry-pomodoro-group recurring-task-row-pomos">
-                          <Apple size={18} className="task-pomodoro-apple-lead" aria-hidden="true" />
-                          <div className="pomodoro-picker pomodoro-picker-apple" aria-label="Estimated Pomodoros">
-                            {POMODORO_OPTIONS.map((count) => (
-                              <label key={count}>
-                                <input
-                                  type="radio"
-                                  name={`recurring-task-pomodoros-${item.id}`}
-                                  checked={clampRecurringPomosForUi(item.estimatedPomodoros) === count}
-                                  onChange={() => void commitRecurringPomodorosCount(item, count, false)}
-                                />
-                                <span>{count}</span>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const nextCompleted = !item.isCompleted;
-                            const pomos = clampRecurringPomosForUi(item.estimatedPomodoros);
-                            setRecurring((current) =>
-                              current.map((entry) =>
-                                entry.id === item.id ? { ...entry, isCompleted: nextCompleted } : entry,
-                              ),
-                            );
-                            void dayStore.updateRecurring(today, [
-                              {
-                                id: item.id,
-                                isCompleted: nextCompleted,
-                                titleSnapshot: item.titleSnapshot,
-                                startTimeHhmm: item.startTimeSnapshotHhmm ?? undefined,
-                                estimatedPomodoros: pomos,
-                              },
-                            ]);
-                          }}
-                          aria-label={item.isCompleted ? "Mark recurring as not completed" : "Mark recurring as completed"}
-                          title={
-                            item.isCompleted
-                              ? "Mark this recurring row as not completed for today (reset completion)"
-                              : "Mark this recurring row as completed for today"
-                          }
-                        >
-                          {item.isCompleted ? <RotateCcw size={18} aria-hidden="true" /> : <Check size={18} aria-hidden="true" />}
-                        </button>
-                        <button
-                          type="button"
-                          className="recurring-row-delete"
-                          onClick={() => void deleteRecurringTemplateForItem(item.recurringTemplateId, item.titleSnapshot)}
-                          aria-label={`Delete recurring template ${item.titleSnapshot}`}
-                          title="Delete this recurring template from all future days"
-                        >
-                          <Trash2 size={18} aria-hidden="true" />
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div className="panel">
-                <h3>Recurring Calendar Events</h3>
-                <p className="panel-subheader">
-                  One block per day on the timeline (for example lunch). These are not split into pomodoro sessions.
-                </p>
-                <div className="add-card recurring-add-card">
-                  <input
-                    value={recurringCalendarDraft.title}
-                    onChange={(event) => setRecurringCalendarDraft((current) => ({ ...current, title: event.target.value }))}
-                    placeholder="e.g. Lunch"
-                    aria-label="New recurring calendar event title"
-                  />
-                  <select
-                    value={recurringCalendarDraft.startTime}
-                    onChange={(event) => {
-                      const nextStart = event.target.value;
-                      setRecurringCalendarDraft((current) => {
-                        const durationMinutes = durationMinutesFromRange(current.startTime, current.endTime);
-                        const rawEnd = formatMinutesToHhmm(parseHhmmToMinutes(nextStart) + durationMinutes);
-                        return {
-                          ...current,
-                          startTime: nextStart,
-                          endTime: clampEventEndTime(nextStart, rawEnd),
-                        };
-                      });
-                    }}
-                    aria-label="New recurring calendar start time"
-                  >
-                    {TIME_OPTIONS.map((time) => (
-                      <option key={time} value={time}>{formatSelectTime(time)}</option>
-                    ))}
-                  </select>
-                  <select
-                    value={
-                      recurringCalendarDraftEndOptions.includes(recurringCalendarDraft.endTime)
-                        ? recurringCalendarDraft.endTime
-                        : clampEventEndTime(recurringCalendarDraft.startTime, recurringCalendarDraft.endTime)
-                    }
-                    onChange={(event) =>
-                      setRecurringCalendarDraft((current) => ({
-                        ...current,
-                        endTime: clampEventEndTime(current.startTime, event.target.value),
-                      }))
-                    }
-                    aria-label="New recurring calendar end time"
-                  >
-                    {recurringCalendarDraftEndOptions.map((time) => (
-                      <option key={time} value={time}>{formatEndOptionLabel(recurringCalendarDraft.startTime, time)}</option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => void addRecurringCalendarTemplate()}
-                    aria-label="Add recurring calendar event"
-                    title="Add recurring calendar event"
-                  >
-                    <Plus size={18} aria-hidden="true" />
-                  </button>
-                </div>
-                <ul className="editable-list">
-                  {recurringCalendarRows.map((item) => (
-                    <li key={item.id}>
-                      <div
-                        className={`edit-row recurring-entry${item.isCompleted ? " recurring-entry-finished" : ""}`}
-                      >
-                        <input
-                          className={`recurring-title-input${item.isCompleted ? " is-line-through" : ""}`}
-                          value={item.titleSnapshot}
-                          onChange={(event) =>
-                            setRecurring((current) =>
-                              current.map((entry) => (entry.id === item.id ? { ...entry, titleSnapshot: event.target.value } : entry)),
-                            )
-                          }
-                          onBlur={(event) => {
-                            const title = event.target.value.trim();
-                            const merged: RecurringItemTimed = { ...item, titleSnapshot: title };
-                            setRecurring((current) =>
-                              current.map((entry) => (entry.id === item.id ? merged : entry)),
-                            );
-                            void dayStore.updateRecurring(today, [
-                              {
-                                id: merged.id,
-                                isCompleted: merged.isCompleted,
-                                titleSnapshot: merged.titleSnapshot,
-                                startTimeHhmm: merged.startTimeSnapshotHhmm ?? undefined,
-                                endTimeHhmm: merged.endTimeSnapshotHhmm ?? undefined,
-                              },
-                            ]);
-                          }}
-                          aria-label="Recurring calendar event title"
-                        />
-                        <select
-                          value={item.startTimeSnapshotHhmm ?? DEFAULT_RECURRING_CALENDAR_START_TIME}
-                          onChange={(event) => handleRecurringCalendarStartChange(item.id, event.target.value)}
-                          aria-label="Recurring calendar start time"
-                        >
-                          {TIME_OPTIONS.map((time) => (
-                            <option key={time} value={time}>{formatSelectTime(time)}</option>
-                          ))}
-                        </select>
-                        <select
-                          value={(() => {
-                            const startH = item.startTimeSnapshotHhmm ?? DEFAULT_RECURRING_CALENDAR_START_TIME;
-                            const opts = eventEndTimeOptions(startH);
-                            const endH = item.endTimeSnapshotHhmm ?? DEFAULT_RECURRING_CALENDAR_END_TIME;
-                            if (opts.includes(endH)) return endH;
-                            return clampEventEndTime(startH, endH);
-                          })()}
-                          onChange={(event) => {
-                            const startH = item.startTimeSnapshotHhmm ?? DEFAULT_RECURRING_CALENDAR_START_TIME;
-                            const nextEnd = clampEventEndTime(startH, event.target.value);
-                            const merged: RecurringItemTimed = { ...item, endTimeSnapshotHhmm: nextEnd };
-                            setRecurring((current) =>
-                              current.map((entry) => (entry.id === item.id ? merged : entry)),
-                            );
-                            void dayStore.updateRecurring(today, [
-                              {
-                                id: merged.id,
-                                isCompleted: merged.isCompleted,
-                                titleSnapshot: merged.titleSnapshot,
-                                startTimeHhmm: merged.startTimeSnapshotHhmm ?? undefined,
-                                endTimeHhmm: merged.endTimeSnapshotHhmm ?? undefined,
-                              },
-                            ]);
-                          }}
-                          aria-label="Recurring calendar end time"
-                        >
-                          {eventEndTimeOptions(item.startTimeSnapshotHhmm ?? DEFAULT_RECURRING_CALENDAR_START_TIME).map((time) => (
-                            <option key={time} value={time}>
-                              {formatEndOptionLabel(item.startTimeSnapshotHhmm ?? DEFAULT_RECURRING_CALENDAR_START_TIME, time)}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const nextCompleted = !item.isCompleted;
-                            setRecurring((current) =>
-                              current.map((entry) =>
-                                entry.id === item.id ? { ...entry, isCompleted: nextCompleted } : entry,
-                              ),
-                            );
-                            void dayStore.updateRecurring(today, [
-                              {
-                                id: item.id,
-                                isCompleted: nextCompleted,
-                                titleSnapshot: item.titleSnapshot,
-                                startTimeHhmm: item.startTimeSnapshotHhmm ?? undefined,
-                                endTimeHhmm: item.endTimeSnapshotHhmm ?? undefined,
-                              },
-                            ]);
-                          }}
-                          aria-label={item.isCompleted ? "Mark as not completed" : "Mark as completed"}
-                          title={
-                            item.isCompleted
-                              ? "Mark this block as not completed for today"
-                              : "Mark this block as completed for today"
-                          }
-                        >
-                          {item.isCompleted ? <RotateCcw size={18} aria-hidden="true" /> : <Check size={18} aria-hidden="true" />}
-                        </button>
-                        <button
-                          type="button"
-                          className="recurring-row-delete"
-                          onClick={() => void deleteRecurringTemplateForItem(item.recurringTemplateId, item.titleSnapshot)}
-                          aria-label={`Delete recurring calendar template ${item.titleSnapshot}`}
-                          title="Delete this recurring template from all future days"
-                        >
-                          <Trash2 size={18} aria-hidden="true" />
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div className="panel">
-                <h3>Add Calendar Events</h3>
-                <div className="add-card">
-                  <input
-                    value={eventDraft.title}
-                    onChange={(event) => setEventDraft((current) => ({ ...current, title: event.target.value }))}
-                    placeholder="Meeting title"
-                  />
-                  <select
-                    value={eventDraft.startTime}
-                    onChange={(event) => handleEventDraftStartChange(event.target.value)}
-                    aria-label="Event start"
-                  >
-                    {TIME_OPTIONS.map((time) => (
-                      <option key={time} value={time}>{formatSelectTime(time)}</option>
-                    ))}
-                  </select>
-                  <select
-                    value={
-                      eventDraftEndOptions.includes(eventDraft.endTime)
-                        ? eventDraft.endTime
-                        : clampEventEndTime(eventDraft.startTime, eventDraft.endTime)
-                    }
-                    onChange={(event) =>
-                      setEventDraft((current) => ({
-                        ...current,
-                        endTime: clampEventEndTime(current.startTime, event.target.value),
-                      }))
-                    }
-                    aria-label="Event end"
-                  >
-                    {eventDraftEndOptions.map((time) => (
-                      <option key={time} value={time}>{formatEndOptionLabel(eventDraft.startTime, time)}</option>
-                    ))}
-                  </select>
-                  <button onClick={addEvent} aria-label="Add event" title="Add event">
-                    <Plus size={18} aria-hidden="true" />
-                  </button>
-                </div>
-                <ul className="editable-list">
-                  {events.map((eventItem) => (
-                    <li key={eventItem.clientId}>
-                      <div className="edit-row event-entry">
-                        <input
-                          value={eventItem.title}
-                          onChange={(event) => updateEvent(eventItem.clientId, { title: event.target.value })}
-                          aria-label="Event title"
-                        />
-                        <select
-                          value={eventItem.startTime}
-                          onChange={(event) => handleEventStartChange(eventItem.clientId, event.target.value)}
-                          aria-label="Event start"
-                        >
-                          {TIME_OPTIONS.map((time) => (
-                            <option key={time} value={time}>{formatSelectTime(time)}</option>
-                          ))}
-                        </select>
-                        <select
-                          value={(() => {
-                            const opts = eventEndTimeOptions(eventItem.startTime);
-                            if (opts.includes(eventItem.endTime)) return eventItem.endTime;
-                            return clampEventEndTime(eventItem.startTime, eventItem.endTime);
-                          })()}
-                          onChange={(event) =>
-                            updateEvent(eventItem.clientId, {
-                              endTime: clampEventEndTime(eventItem.startTime, event.target.value),
-                            })
-                          }
-                          aria-label="Event end"
-                        >
-                          {eventEndTimeOptions(eventItem.startTime).map((time) => (
-                            <option key={time} value={time}>{formatEndOptionLabel(eventItem.startTime, time)}</option>
-                          ))}
-                        </select>
-                        <button onClick={() => deleteEvent(eventItem.clientId)} aria-label="Remove event" title="Remove event">
-                          <Minus size={18} aria-hidden="true" />
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          </div>
-
-          <div className="editing-timer-rail">
-            <TimerCard
-              title="Planning Timer"
-              variant="planning"
-              labelText="Planning session"
-              timeText={`${Math.floor(planningSecondsLeft / 60)}:${String(planningSecondsLeft % 60).padStart(2, "0")}`}
-              progressPercent={planningProgressPercent}
-              stateText={`State: ${planningState}`}
-              helperText="Use this 10-minute timer to time box your planning session."
-              actions={(
-                <>
-                  <button
-                    type="button"
-                    onClick={startPlanningTimer}
-                    disabled={planningSecondsLeft === 0 || planningTimerRunning}
-                    aria-label="Start planning timer"
-                  >
-                    <Play size={18} aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={pausePlanningTimer}
-                    disabled={!planningTimerRunning}
-                    aria-label="Pause planning timer"
-                  >
-                    <Pause size={18} aria-hidden="true" />
-                  </button>
-                  <button type="button" onClick={resetPlanningTimer} aria-label="Reset planning timer">
-                    <RotateCcw size={18} aria-hidden="true" />
-                  </button>
-                </>
-              )}
-            />
-          </div>
-        </section>
-      )}
-
-      {mode === "timeline" && (
-        <section className="execution">
+      <section className="execution">
           <div className="timeline panel">
-            <div className="section-heading">
-              <h2>Timeline</h2>
-              <div className="section-actions">
-                <button onClick={() => void resetDay()}>
-                  <RotateCcw size={18} aria-hidden="true" />
-                  <span>Reset Day</span>
-                </button>
-                <button onClick={() => setMode("editing")}>
-                  <Pencil size={18} aria-hidden="true" />
-                  <span>Edit Timeline</span>
-                </button>
+            <div className="section-heading timeline-options-banner" aria-labelledby="timeline-options-heading">
+              <h2 id="timeline-options-heading" className="timeline-options-title">Options</h2>
+              <div className="timeline-options-toolbar">
+                <div className="day-boundary-fields day-boundary-fields--toolbar">
+                  <label>
+                    <span>Day Start</span>
+                    <select value={dayStartTime} onChange={(event) => handleDayStartTimeChange(event.target.value)} aria-label="Day start time">
+                      {TIME_OPTIONS.map((time) => (
+                        <option key={time} value={time}>{formatSelectTime(time)}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Day End</span>
+                    <select value={dayEndTime} onChange={(event) => handleDayEndTimeChange(event.target.value)} aria-label="Day end time">
+                      {dayEndOptions.map((time) => (
+                        <option key={time} value={time}>{formatSelectTime(time)}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="section-actions timeline-options-actions">
+                  <button type="button" onClick={() => void resetDay()}>
+                    <RotateCcw size={18} aria-hidden="true" />
+                    <span>Reset Day</span>
+                  </button>
+                  <button type="button" onClick={() => void clearDay()}>
+                    <Trash2 size={18} aria-hidden="true" />
+                    <span>Clear Day</span>
+                  </button>
+                </div>
               </div>
             </div>
             {unscheduledCount > 0 && <p className="warning">{unscheduledCount} tasks could not be fully scheduled.</p>}
@@ -2252,9 +1678,13 @@ function App() {
                   const showResize =
                     (block.blockType === "fixed_event" || block.blockType === "recurring_event")
                     && editingTimelineBlockId !== block.id;
+                  const isRecurringBlock = Boolean(block.sourceDailyRecurringId) || block.blockType === "recurring_event";
+                  const repeatActive = isRecurringBlock;
                   const itemClassName = `${blockClass(block)}${item.kind === "focus-session" ? " calendar-block-session" : ""}${
                     isActive ? " active" : ""
-                  }${editingTimelineBlockId === block.id ? " editing" : ""}${showResize ? " calendar-block-resizable" : ""}`;
+                  }${editingTimelineBlockId === block.id ? " editing" : ""}${showResize ? " calendar-block-resizable" : ""}${
+                    isRecurringBlock ? " calendar-block-is-recurring" : ""
+                  }`;
 
                   return (
                     <div key={item.id} className={itemClassName} style={calendarItemStyleResolved(item)}>
@@ -2329,15 +1759,42 @@ function App() {
                               </>
                             )}
                             {block.blockType !== "break" && editingTimelineBlockId !== block.id && (
-                              <button
-                                type="button"
-                                onPointerDown={(e) => e.stopPropagation()}
-                                onClick={() => beginTimelineEdit(block)}
-                                aria-label={`Edit ${block.label}`}
-                                title="Edit"
-                              >
-                                <Pencil size={16} aria-hidden="true" />
-                              </button>
+                              <>
+                                {(block.blockType === "focus" || block.blockType === "fixed_event" || block.blockType === "recurring_event") && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className={repeatActive ? "calendar-icon-btn calendar-repeat-on" : "calendar-icon-btn"}
+                                      onPointerDown={(e) => e.stopPropagation()}
+                                      onClick={() => void handleCalendarRepeatClick(block)}
+                                      aria-label="Recurring"
+                                      title="Mark as recurring for future days, or turn off if already recurring"
+                                      aria-pressed={repeatActive}
+                                    >
+                                      <Repeat size={16} aria-hidden="true" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="calendar-icon-btn"
+                                      onPointerDown={(e) => e.stopPropagation()}
+                                      onClick={() => void removeCalendarBlock(block)}
+                                      aria-label="Remove from calendar"
+                                      title="Remove from calendar"
+                                    >
+                                      <Trash2 size={16} aria-hidden="true" />
+                                    </button>
+                                  </>
+                                )}
+                                <button
+                                  type="button"
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  onClick={() => beginTimelineEdit(block)}
+                                  aria-label={`Edit ${block.label}`}
+                                  title="Edit"
+                                >
+                                  <Pencil size={16} aria-hidden="true" />
+                                </button>
+                              </>
                             )}
                           </div>
                         </div>
@@ -2638,6 +2095,26 @@ function App() {
                               </button>
                             </div>
                           </div>
+                          <div className="timeline-task-row-icons">
+                            <button
+                              type="button"
+                              className="timeline-row-icon-btn"
+                              onClick={() => void promoteAdhocTaskToRecurring(task.serverId as string)}
+                              aria-label="Make recurring"
+                              title="Make recurring"
+                            >
+                              <Repeat size={16} aria-hidden="true" />
+                            </button>
+                            <button
+                              type="button"
+                              className="timeline-row-icon-btn"
+                              onClick={() => void removeAdhocTask(task.serverId as string)}
+                              aria-label="Remove task"
+                              title="Remove task"
+                            >
+                              <Trash2 size={16} aria-hidden="true" />
+                            </button>
+                          </div>
                           <div className="timeline-task-actions">
                             {task.status !== "completed" ? (
                               <button
@@ -2663,9 +2140,15 @@ function App() {
                   {recurringTaskRows.map((item) => {
                     const pomos = clampRecurringPomosForUi(item.estimatedPomodoros);
                     return (
-                    <li key={`recurring-${item.id}`} className="timeline-task-list-row">
+                    <li key={`recurring-${item.id}`} className="timeline-task-list-row is-recurring">
                       <div className="timeline-task-list-main">
-                        <span className={item.isCompleted ? "timeline-task-title is-completed" : "timeline-task-title"}>
+                        <span
+                          className={
+                            item.isCompleted
+                              ? "timeline-task-title is-completed is-recurring"
+                              : "timeline-task-title is-recurring"
+                          }
+                        >
                           {item.titleSnapshot}
                         </span>
                         <div className="timeline-task-pomodoro-row">
@@ -2691,6 +2174,27 @@ function App() {
                           </button>
                         </div>
                       </div>
+                      <div className="timeline-task-row-icons">
+                        <button
+                          type="button"
+                          className="timeline-row-icon-btn timeline-row-repeat-on"
+                          onClick={() => void demoteRecurringTaskRow(item.id)}
+                          aria-label="Stop repeating (keep as a one-off task today)"
+                          title="Stop repeating (keeps as a one-off for today)"
+                          aria-pressed="true"
+                        >
+                          <Repeat size={16} aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          className="timeline-row-icon-btn"
+                          onClick={() => void deleteRecurringTemplateForItem(item.recurringTemplateId, item.titleSnapshot)}
+                          aria-label="Remove recurring task"
+                          title="Remove recurring task"
+                        >
+                          <Trash2 size={16} aria-hidden="true" />
+                        </button>
+                      </div>
                       <div className="timeline-task-actions">
                         {!item.isCompleted ? (
                           <button
@@ -2714,11 +2218,106 @@ function App() {
                     );
                   })}
                 </ul>
+                <h4>Calendar events</h4>
+                <ul className="timeline-task-list-items">
+                  {events
+                    .filter((ev) => ev.serverId)
+                    .map((ev) => (
+                      <li key={ev.serverId} className="timeline-task-list-row timeline-event-row">
+                        <div className="timeline-task-list-main">
+                          <span className="timeline-task-title">{ev.title}</span>
+                          <span className="timeline-event-time">
+                            {formatSelectTime(ev.startTime)}–{formatSelectTime(ev.endTime)}
+                          </span>
+                        </div>
+                        <div className="timeline-task-row-icons">
+                          <button
+                            type="button"
+                            className="timeline-row-icon-btn"
+                            onClick={() => void promoteFixedEventToRecurring(ev.serverId as string)}
+                            aria-label="Make recurring"
+                            title="Make recurring"
+                          >
+                            <Repeat size={16} aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            className="timeline-row-icon-btn"
+                            onClick={() => void removeFixedEventRow(ev.serverId as string)}
+                            aria-label="Remove event from calendar"
+                            title="Remove from calendar"
+                          >
+                            <Trash2 size={16} aria-hidden="true" />
+                          </button>
+                        </div>
+                        <div className="timeline-task-actions" aria-hidden="true" />
+                      </li>
+                    ))}
+                  {recurringCalendarRows.map((item) => (
+                    <li key={`cal-rec-${item.id}`} className="timeline-task-list-row is-recurring timeline-event-row">
+                      <div className="timeline-task-list-main">
+                        <span
+                          className={
+                            item.isCompleted
+                              ? "timeline-task-title is-completed is-recurring"
+                              : "timeline-task-title is-recurring"
+                          }
+                        >
+                          {item.titleSnapshot}
+                        </span>
+                        <span className="timeline-event-time">
+                          {formatSelectTime(item.startTimeSnapshotHhmm ?? DEFAULT_RECURRING_CALENDAR_START_TIME)}
+                          –
+                          {formatSelectTime(item.endTimeSnapshotHhmm ?? DEFAULT_RECURRING_CALENDAR_END_TIME)}
+                        </span>
+                      </div>
+                      <div className="timeline-task-row-icons">
+                        <button
+                          type="button"
+                          className="timeline-row-icon-btn timeline-row-repeat-on"
+                          onClick={() => void demoteRecurringCalendarRow(item.id)}
+                          aria-label="Stop repeating"
+                          title="Stop repeating (keeps as a one-off event today)"
+                          aria-pressed="true"
+                        >
+                          <Repeat size={16} aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          className="timeline-row-icon-btn"
+                          onClick={() => void deleteRecurringTemplateForItem(item.recurringTemplateId, item.titleSnapshot)}
+                          aria-label="Remove recurring event"
+                          title="Remove recurring event"
+                        >
+                          <Trash2 size={16} aria-hidden="true" />
+                        </button>
+                      </div>
+                      <div className="timeline-task-actions">
+                        {!item.isCompleted ? (
+                          <button
+                            type="button"
+                            className="timeline-task-complete"
+                            onClick={() => void setTimelineRecurringCompletion(item.id, true)}
+                          >
+                            Complete
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="timeline-task-undo"
+                            onClick={() => void setTimelineRecurringCompletion(item.id, false)}
+                          >
+                            Undo
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
               </div>
             </div>
           </div>
         </section>
-      )}
     </main>
   );
 }

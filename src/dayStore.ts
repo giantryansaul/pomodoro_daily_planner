@@ -216,9 +216,16 @@ function migrateTimelineBlocks(blocks: ScheduleBlock[]): ScheduleBlock[] {
   }));
 }
 
-function hhmmFromIsoLocal(iso: string): string {
+function hhmmFromIsoLocal(iso: string): string | null {
   const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/** True when both are valid HH:MM and represent different clock times (allows cross-midnight ranges). */
+function calendarRangeHhmmValid(startHhmm: string, endHhmm: string): boolean {
+  if (!HHMM_PATTERN.test(startHhmm) || !HHMM_PATTERN.test(endHhmm)) return false;
+  return hhmmToMinutes(startHhmm) !== hhmmToMinutes(endHhmm);
 }
 
 function migrateDailyRecurringRows(items: DailyRecurringItem[]): DailyRecurringItem[] {
@@ -299,24 +306,33 @@ function eventKey(event: EventInput): string {
 
 function dailyRecurringToFixedEvent(dateIso: string, dayPlanId: string, item: DailyRecurringItem): FixedEvent | null {
   if (!item.startTimeSnapshotHhmm) return null;
+  const start = new Date(`${dateIso}T${item.startTimeSnapshotHhmm}:00`);
+  if (Number.isNaN(start.getTime())) return null;
+
   if (item.kind === "calendar_event") {
     if (!item.endTimeSnapshotHhmm) return null;
+    let end = new Date(`${dateIso}T${item.endTimeSnapshotHhmm}:00`);
+    if (Number.isNaN(end.getTime())) return null;
+    if (end.getTime() <= start.getTime()) {
+      end = new Date(end.getTime() + 24 * 60 * 60 * 1000);
+    }
     return {
       id: item.id,
       dayPlanId,
       title: item.titleSnapshot,
-      startTimeIso: `${dateIso}T${item.startTimeSnapshotHhmm}:00`,
-      endTimeIso: `${dateIso}T${item.endTimeSnapshotHhmm}:00`,
+      startTimeIso: start.toISOString(),
+      endTimeIso: end.toISOString(),
     };
   }
+
   const pomos = clampRecurringPomodoros(item.estimatedPomodoros ?? 1);
-  const endHhmm = addMinutesToHhmm(item.startTimeSnapshotHhmm, pomos * FOCUS_SESSION_MINUTES);
+  const end = new Date(start.getTime() + pomos * FOCUS_SESSION_MINUTES * 60_000);
   return {
     id: item.id,
     dayPlanId,
     title: item.titleSnapshot,
-    startTimeIso: `${dateIso}T${item.startTimeSnapshotHhmm}:00`,
-    endTimeIso: `${dateIso}T${endHhmm}:00`,
+    startTimeIso: start.toISOString(),
+    endTimeIso: end.toISOString(),
   };
 }
 
@@ -387,13 +403,7 @@ function parseRecurringTemplateInput(input: RecurringTemplateInput | undefined):
   if (!title) return null;
 
   if (kind === "calendar_event") {
-    if (
-      !startTimeHhmm
-      || !endTimeHhmm
-      || !HHMM_PATTERN.test(startTimeHhmm)
-      || !HHMM_PATTERN.test(endTimeHhmm)
-      || startTimeHhmm >= endTimeHhmm
-    ) {
+    if (!startTimeHhmm || !endTimeHhmm || !calendarRangeHhmmValid(startTimeHhmm, endTimeHhmm)) {
       return null;
     }
     return { title, startTimeHhmm, endTimeHhmm, kind };
@@ -407,6 +417,31 @@ function parseRecurringTemplateInput(input: RecurringTemplateInput | undefined):
   }
   const derivedEnd = addMinutesToHhmm(startTimeHhmm, estimatedPomodoros * FOCUS_SESSION_MINUTES);
   return { title, startTimeHhmm, endTimeHhmm: derivedEnd, kind, estimatedPomodoros };
+}
+
+function clearTimerIfActiveBlockInSet(bundle: DayBundle, blockIds: Set<string>): void {
+  if (bundle.timerSession.activeBlockId && blockIds.has(bundle.timerSession.activeBlockId)) {
+    bundle.timerSession = {
+      ...bundle.timerSession,
+      activeBlockId: null,
+      state: "idle",
+      elapsedSeconds: 0,
+      startedAt: null,
+      pausedAt: null,
+    };
+  }
+}
+
+function stripTimelineBlocksForTask(bundle: DayBundle, taskId: string): void {
+  const ids = new Set(bundle.timeline.filter((b) => b.sourceTaskId === taskId).map((b) => b.id));
+  clearTimerIfActiveBlockInSet(bundle, ids);
+  bundle.timeline = bundle.timeline.filter((b) => b.sourceTaskId !== taskId);
+}
+
+function stripTimelineBlocksForEvent(bundle: DayBundle, eventId: string): void {
+  const ids = new Set(bundle.timeline.filter((b) => b.sourceEventId === eventId).map((b) => b.id));
+  clearTimerIfActiveBlockInSet(bundle, ids);
+  bundle.timeline = bundle.timeline.filter((b) => b.sourceEventId !== eventId);
 }
 
 function applyRecurringUpdates(bundle: DayBundle, updates: RecurringUpdate[]): void {
@@ -685,23 +720,40 @@ export const dayStore = {
       return { ok: true };
     }
 
+    const focusesForTask = bundle.timeline.filter(
+      (b) => b.sourceTaskId === taskId && b.blockType === "focus",
+    );
+    const plannedFirst = focusesForTask
+      .filter((b) => b.status === "planned")
+      .sort((a, b) => new Date(a.startTimeIso).getTime() - new Date(b.startTimeIso).getTime())[0];
+    const anchorFocus =
+      plannedFirst
+      ?? focusesForTask.sort(
+        (a, b) => new Date(a.startTimeIso).getTime() - new Date(b.startTimeIso).getTime(),
+      )[0];
+
+    const planOptions: GeneratePlanOptions | undefined =
+      anchorFocus != null
+        ? { preferredFirstFocusStartIsoByTaskId: { [taskId]: anchorFocus.startTimeIso } }
+        : undefined;
+
     bundle.tasks = bundle.tasks.map((entry) =>
       entry.id === taskId ? { ...entry, estimatedPomodoros: next } : entry,
     );
-    generateAndPersist(bundle, parsePlannerWindow(plannerWindow));
+    generateAndPersist(bundle, parsePlannerWindow(plannerWindow), planOptions);
     return { ok: true };
   },
 
   async createRecurringTemplateForDay(
     dateIso: string,
     input: RecurringTemplateInput,
-  ): Promise<{ ok: boolean; recurring?: DailyRecurringItem[] }> {
+  ): Promise<{ ok: boolean; recurring?: DailyRecurringItem[]; result?: PlannerResult }> {
     const validInput = parseRecurringTemplateInput(input);
     if (!validInput) return { ok: false };
     const templates = readRecurringTemplates();
     const maxSort = templates.reduce((current, template) => Math.max(current, template.sortOrder), -1);
     const isCalendar = validInput.kind === "calendar_event";
-    const created: RecurringTemplate = {
+    const created: RecurringTemplate = normalizeRecurringTemplate({
       id: newId(),
       title: validInput.title,
       startTimeHhmm: validInput.startTimeHhmm ?? null,
@@ -710,13 +762,174 @@ export const dayStore = {
       sortOrder: maxSort + 1,
       isActive: true,
       kind: validInput.kind ?? "task",
-    };
+    });
     writeRecurringTemplates([...templates, created]);
 
     const bundle = loadOrCreateDayBundle(dateIso);
     bundle.dailyRecurring = materializeRecurringForDay(bundle.id, bundle.dailyRecurring);
-    writeDayBundle(bundle);
-    return { ok: true, recurring: bundle.dailyRecurring };
+    const defaults = readDayBoundaryDefaults();
+    const result = generateAndPersist(bundle, {
+      dayStartTimeHhmm: defaults.dayStartTimeHhmm,
+      dayEndTimeHhmm: defaults.dayEndTimeHhmm,
+    });
+    return { ok: true, recurring: bundle.dailyRecurring, result };
+  },
+
+  async promoteTaskToRecurringTemplate(
+    dateIso: string,
+    taskId: string,
+    plannerWindow: PlannerWindowInput,
+  ): Promise<{ ok: boolean; result?: PlannerResult }> {
+    const bundle = loadOrCreateDayBundle(dateIso);
+    const task = bundle.tasks.find((t) => t.id === taskId);
+    if (!task) return { ok: false };
+
+    const focusForTask = bundle.timeline
+      .filter((b) => b.sourceTaskId === taskId && b.blockType === "focus")
+      .sort((a, b) => new Date(a.startTimeIso).getTime() - new Date(b.startTimeIso).getTime());
+    if (focusForTask.length === 0) return { ok: false };
+    const firstStart = hhmmFromIsoLocal(focusForTask[0].startTimeIso);
+    if (!firstStart || !HHMM_PATTERN.test(firstStart)) return { ok: false };
+    const startHhmm = firstStart;
+    const pomos = clampRecurringPomodoros(task.estimatedPomodoros ?? 1);
+
+    const templates = readRecurringTemplates();
+    const maxSort = templates.reduce((current, template) => Math.max(current, template.sortOrder), -1);
+    const created: RecurringTemplate = normalizeRecurringTemplate({
+      id: newId(),
+      title: task.title,
+      startTimeHhmm: startHhmm,
+      endTimeHhmm: addMinutesToHhmm(startHhmm, pomos * FOCUS_SESSION_MINUTES),
+      estimatedPomodoros: pomos,
+      sortOrder: maxSort + 1,
+      isActive: true,
+      kind: "task",
+    });
+    writeRecurringTemplates([...templates, created]);
+
+    bundle.tasks = bundle.tasks.filter((t) => t.id !== taskId);
+    stripTimelineBlocksForTask(bundle, taskId);
+    bundle.dailyRecurring = materializeRecurringForDay(bundle.id, bundle.dailyRecurring);
+    const result = generateAndPersist(bundle, parsePlannerWindow(plannerWindow));
+    return { ok: true, result };
+  },
+
+  async promoteFixedEventToRecurringTemplate(
+    dateIso: string,
+    eventId: string,
+    plannerWindow: PlannerWindowInput,
+  ): Promise<{ ok: boolean; result?: PlannerResult }> {
+    const bundle = loadOrCreateDayBundle(dateIso);
+    const ev = bundle.fixedEvents.find((e) => e.id === eventId);
+    if (!ev) return { ok: false };
+
+    const startHhmm = hhmmFromIsoLocal(ev.startTimeIso);
+    const endHhmm = hhmmFromIsoLocal(ev.endTimeIso);
+    if (!startHhmm || !endHhmm || !calendarRangeHhmmValid(startHhmm, endHhmm)) {
+      return { ok: false };
+    }
+
+    const templates = readRecurringTemplates();
+    const maxSort = templates.reduce((current, template) => Math.max(current, template.sortOrder), -1);
+    const created: RecurringTemplate = normalizeRecurringTemplate({
+      id: newId(),
+      title: ev.title,
+      startTimeHhmm: startHhmm,
+      endTimeHhmm: endHhmm,
+      estimatedPomodoros: null,
+      sortOrder: maxSort + 1,
+      isActive: true,
+      kind: "calendar_event",
+    });
+    writeRecurringTemplates([...templates, created]);
+
+    bundle.fixedEvents = bundle.fixedEvents.filter((e) => e.id !== eventId);
+    stripTimelineBlocksForEvent(bundle, eventId);
+    bundle.dailyRecurring = materializeRecurringForDay(bundle.id, bundle.dailyRecurring);
+    const result = generateAndPersist(bundle, parsePlannerWindow(plannerWindow));
+    return { ok: true, result };
+  },
+
+  async removeTaskById(
+    dateIso: string,
+    taskId: string,
+    plannerWindow: PlannerWindowInput,
+  ): Promise<{ ok: boolean; result?: PlannerResult }> {
+    const bundle = loadOrCreateDayBundle(dateIso);
+    if (!bundle.tasks.some((t) => t.id === taskId)) return { ok: false };
+    bundle.tasks = bundle.tasks.filter((t) => t.id !== taskId);
+    stripTimelineBlocksForTask(bundle, taskId);
+    const result = generateAndPersist(bundle, parsePlannerWindow(plannerWindow));
+    return { ok: true, result };
+  },
+
+  async removeFixedEventById(
+    dateIso: string,
+    eventId: string,
+    plannerWindow: PlannerWindowInput,
+  ): Promise<{ ok: boolean; result?: PlannerResult }> {
+    const bundle = loadOrCreateDayBundle(dateIso);
+    if (!bundle.fixedEvents.some((e) => e.id === eventId)) return { ok: false };
+    bundle.fixedEvents = bundle.fixedEvents.filter((e) => e.id !== eventId);
+    stripTimelineBlocksForEvent(bundle, eventId);
+    const result = generateAndPersist(bundle, parsePlannerWindow(plannerWindow));
+    return { ok: true, result };
+  },
+
+  async demoteRecurringTaskToOneOff(
+    dateIso: string,
+    dailyRecurringId: string,
+    plannerWindow: PlannerWindowInput,
+  ): Promise<{ ok: boolean; result?: PlannerResult }> {
+    const bundle = loadOrCreateDayBundle(dateIso);
+    const item = bundle.dailyRecurring.find(
+      (entry) => entry.id === dailyRecurringId && (entry.kind ?? "task") !== "calendar_event",
+    );
+    if (!item) return { ok: false };
+
+    const templates = readRecurringTemplates().filter((template) => template.id !== item.recurringTemplateId);
+    writeRecurringTemplates(templates);
+
+    const newTask: Task = {
+      id: newId(),
+      dayPlanId: bundle.id,
+      title: item.titleSnapshot,
+      notes: null,
+      priorityRank: 1,
+      estimatedPomodoros: clampRecurringPomodoros(item.estimatedPomodoros ?? 1),
+      status: item.isCompleted ? "completed" : "pending",
+    };
+    const bumped = bundle.tasks.map((entry) => ({ ...entry, priorityRank: entry.priorityRank + 1 }));
+    bundle.tasks = [newTask, ...bumped];
+
+    bundle.dailyRecurring = materializeRecurringForDay(bundle.id, bundle.dailyRecurring);
+    const result = generateAndPersist(bundle, parsePlannerWindow(plannerWindow));
+    return { ok: true, result };
+  },
+
+  async demoteRecurringCalendarToOneOff(
+    dateIso: string,
+    dailyRecurringId: string,
+    plannerWindow: PlannerWindowInput,
+  ): Promise<{ ok: boolean; result?: PlannerResult }> {
+    const bundle = loadOrCreateDayBundle(dateIso);
+    const item = bundle.dailyRecurring.find((entry) => entry.id === dailyRecurringId && entry.kind === "calendar_event");
+    if (!item || !item.startTimeSnapshotHhmm || !item.endTimeSnapshotHhmm) return { ok: false };
+
+    const templates = readRecurringTemplates().filter((template) => template.id !== item.recurringTemplateId);
+    writeRecurringTemplates(templates);
+
+    bundle.fixedEvents.push({
+      id: newId(),
+      dayPlanId: bundle.id,
+      title: item.titleSnapshot,
+      startTimeIso: `${dateIso}T${item.startTimeSnapshotHhmm}:00`,
+      endTimeIso: `${dateIso}T${item.endTimeSnapshotHhmm}:00`,
+    });
+
+    bundle.dailyRecurring = materializeRecurringForDay(bundle.id, bundle.dailyRecurring);
+    const result = generateAndPersist(bundle, parsePlannerWindow(plannerWindow));
+    return { ok: true, result };
   },
 
   async getEvents(dateIso: string): Promise<{ dayPlanId: string; events: FixedEvent[] }> {
@@ -1014,6 +1227,17 @@ export const dayStore = {
         block.id === blockId && (block.blockType === "fixed_event" || block.blockType === "recurring_event"),
     );
     if (!target) return { ok: false };
+
+    let recurringWallTimes: { startHhmm: string; endHhmm: string } | null = null;
+    if (target.blockType === "recurring_event" && target.sourceDailyRecurringId) {
+      const startHhmm = hhmmFromIsoLocal(input.startTimeIso);
+      const endHhmm = hhmmFromIsoLocal(input.endTimeIso);
+      if (!startHhmm || !endHhmm || !calendarRangeHhmmValid(startHhmm, endHhmm)) {
+        return { ok: false };
+      }
+      recurringWallTimes = { startHhmm, endHhmm };
+    }
+
     bundle.timeline = bundle.timeline.map((block) =>
       block.id === blockId
         ? { ...block, label, startTimeIso: input.startTimeIso, endTimeIso: input.endTimeIso }
@@ -1034,9 +1258,8 @@ export const dayStore = {
       );
     }
 
-    if (target.blockType === "recurring_event" && target.sourceDailyRecurringId) {
-      const startHhmm = hhmmFromIsoLocal(input.startTimeIso);
-      const endHhmm = hhmmFromIsoLocal(input.endTimeIso);
+    if (target.blockType === "recurring_event" && target.sourceDailyRecurringId && recurringWallTimes) {
+      const { startHhmm, endHhmm } = recurringWallTimes;
       const rid = target.sourceDailyRecurringId;
       bundle.dailyRecurring = bundle.dailyRecurring.map((item) =>
         item.id === rid

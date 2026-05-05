@@ -202,14 +202,47 @@ body {
 }
 
 .timeline-task-list-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.75rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.5rem 0.65rem;
   padding: 0.45rem 0.55rem;
   border-radius: 10px;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
+}
+
+.timeline-task-list-row.is-recurring {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+}
+
+.timeline-task-row-icons {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+
+.timeline-row-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.timeline-row-icon-btn:hover {
+  background: rgb(15 23 42 / 6%);
+  color: #0f172a;
+}
+
+.timeline-row-repeat-on {
+  color: #4f46e5;
 }
 
 .timeline-task-list-main {
@@ -241,6 +274,20 @@ body {
 .timeline-task-title.is-completed {
   text-decoration: line-through;
   color: #64748b;
+}
+
+.timeline-task-title.is-recurring:not(.is-completed) {
+  color: #4338ca;
+}
+
+.timeline-event-time {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #64748b;
+}
+
+.timeline-event-row .timeline-task-list-main {
+  gap: 0.2rem;
 }
 
 .timeline-task-actions {
@@ -295,6 +342,49 @@ body {
   flex-direction: column;
   align-items: flex-end;
   flex-wrap: nowrap;
+}
+
+.timeline-options-banner {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.timeline-options-title {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.timeline-options-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem 1rem;
+  flex: 1;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.day-boundary-fields--toolbar {
+  flex-direction: row;
+  align-items: center;
+}
+
+.day-boundary-fields--toolbar label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.day-boundary-fields--toolbar label span {
+  white-space: nowrap;
+}
+
+.timeline-options-banner .timeline-options-actions {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  margin-left: 0;
 }
 
 .planning-heading h2 {
@@ -696,6 +786,34 @@ ol {
   border-color: #818cf8;
   color: #1e1b4b;
   box-shadow: 0 4px 14px rgb(79 70 229 / 18%);
+}
+
+.calendar-block-is-recurring {
+  outline: 2px solid rgb(129 140 248 / 55%);
+  outline-offset: 0;
+}
+
+.calendar-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.2rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.88;
+}
+
+.calendar-icon-btn:hover {
+  opacity: 1;
+  background: rgb(255 255 255 / 18%);
+}
+
+.calendar-repeat-on {
+  color: #4f46e5;
+  opacity: 1;
 }
 
 .calendar-block.active {
