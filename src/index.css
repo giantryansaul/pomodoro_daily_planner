@@ -930,6 +930,152 @@ ol {
   background: #dc2626;
 }
 
+/* Calendar: drag, resize, empty-slot popover, slot modals */
+.calendar-block-resizable {
+  justify-content: flex-start;
+  padding-bottom: 0.25rem;
+}
+
+.calendar-block-main.calendar-block-drag-zone {
+  cursor: grab;
+  flex: 1 1 auto;
+  min-height: 0;
+  user-select: none;
+  touch-action: none;
+}
+
+.calendar-block-main.calendar-block-drag-zone:active {
+  cursor: grabbing;
+}
+
+.calendar-event-resize-handle {
+  flex: 0 0 10px;
+  min-height: 10px;
+  margin: 0.2rem -0.5rem 0;
+  border-radius: 0 0 10px 10px;
+  cursor: ns-resize;
+  touch-action: none;
+  z-index: 2;
+  background: transparent;
+  border: 1px solid transparent;
+  border-top: none;
+}
+
+.calendar-event-resize-handle:hover,
+.calendar-event-resize-handle:focus-visible {
+  background: rgb(251 146 60 / 25%);
+  border-color: var(--timeline-calendar-border);
+  outline: none;
+}
+
+.calendar-empty-slot-actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.35rem;
+  min-height: 0;
+  box-sizing: border-box;
+  pointer-events: none;
+  background: rgb(255 255 255 / 96%);
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgb(15 23 42 / 18%);
+}
+
+.calendar-empty-slot-actions .calendar-slot-action-btn {
+  pointer-events: auto;
+}
+
+.calendar-slot-action-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  cursor: pointer;
+  color: #0f172a;
+}
+
+.calendar-slot-action-btn:hover {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+.calendar-slot-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgb(15 23 42 / 42%);
+}
+
+.calendar-slot-modal {
+  width: min(100%, 420px);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.calendar-slot-modal h4 {
+  margin: 0;
+}
+
+.calendar-slot-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.calendar-slot-modal-field input,
+.calendar-slot-modal-field select {
+  font-weight: 600;
+}
+
+.calendar-slot-modal-times {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.calendar-slot-modal-times label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.calendar-slot-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.calendar-slot-modal-cancel {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  padding: 0.45rem 0.85rem;
+  border-radius: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.calendar-slot-modal-cancel:hover {
+  background: #f8fafc;
+}
+
 @media (max-width: 900px) {
   .editing-layout,
   .execution {

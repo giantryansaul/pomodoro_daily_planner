@@ -207,4 +207,36 @@ describe("generatePlan", () => {
     const focus = result.blocks.find((block) => block.blockType === "focus");
     expect(focus?.startTimeIso).toBe(new Date("2026-04-25T10:00:00").toISOString());
   });
+
+  it("honors preferred first focus start when the slot is free", () => {
+    const tasks = [makeTask("task-pref", "Work", 1)];
+    const fixedEvents: FixedEvent[] = [];
+    const preferredIso = new Date("2026-04-25T14:00:00").toISOString();
+    const result = generatePlan("2026-04-25", tasks, fixedEvents, "day-1", [], [], {}, {
+      preferredFirstFocusStartIsoByTaskId: { "task-pref": preferredIso },
+    });
+    const focus = result.blocks.find((block) => block.blockType === "focus" && block.sourceTaskId === "task-pref");
+    expect(focus?.startTimeIso).toBe(new Date("2026-04-25T14:00:00").toISOString());
+  });
+
+  it("falls back when preferred start falls inside a fixed event", () => {
+    const tasks = [makeTask("task-fb", "Work", 1)];
+    const fixedEvents: FixedEvent[] = [
+      {
+        id: "evt-1",
+        dayPlanId: "day-1",
+        title: "All-hands",
+        startTimeIso: "2026-04-25T09:00:00",
+        endTimeIso: "2026-04-25T15:00:00",
+      },
+    ];
+    const preferredIso = new Date("2026-04-25T10:00:00").toISOString();
+    const result = generatePlan("2026-04-25", tasks, fixedEvents, "day-1", [], [], {}, {
+      preferredFirstFocusStartIsoByTaskId: { "task-fb": preferredIso },
+    });
+    const focus = result.blocks.find((block) => block.blockType === "focus" && block.sourceTaskId === "task-fb");
+    const meetingStart = new Date(fixedEvents[0].startTimeIso).getTime();
+    const focusStart = new Date(focus?.startTimeIso ?? "").getTime();
+    expect(focusStart < meetingStart).toBe(true);
+  });
 });

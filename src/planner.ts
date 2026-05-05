@@ -8,6 +8,14 @@ export const FOCUS_SESSION_MINUTES = FOCUS_MINUTES + BREAK_MINUTES;
 interface Session {
   taskId: string;
   title: string;
+  /** True for the first pomodoro session of this task (used for preferred-start hints). */
+  isFirstForTask: boolean;
+}
+
+/** Optional planner hints (e.g. first focus block should start at a snapped calendar slot). */
+export interface GeneratePlanOptions {
+  /** ISO timestamps (same calendar day as `dateIso`) for the first focus block of each task id. */
+  preferredFirstFocusStartIsoByTaskId?: Record<string, string>;
 }
 
 interface Window {
@@ -61,7 +69,7 @@ function expandSessions(tasks: Task[]): Session[] {
   for (const task of ordered) {
     const count = Math.max(1, task.estimatedPomodoros ?? 1);
     for (let i = 0; i < count; i += 1) {
-      sessions.push({ taskId: task.id, title: task.title });
+      sessions.push({ taskId: task.id, title: task.title, isFirstForTask: i === 0 });
     }
   }
   return sessions;
@@ -153,13 +161,91 @@ function addRecurringFocusBreakSessions(recurring: FixedEvent[], dayPlanId: stri
     });
 }
 
+/** Snap to 30-minute grid (matches UI TIME_OPTIONS). */
+function snapTo30MinuteBoundary(date: Date): Date {
+  const d = new Date(date.getTime());
+  const mins = d.getHours() * 60 + d.getMinutes();
+  const snapped = Math.round(mins / 30) * 30;
+  d.setHours(Math.floor(snapped / 60), snapped % 60, 0, 0);
+  return d;
+}
+
+/**
+ * If the preferred instant fits entirely inside a free window, place the focus+break pair there
+ * and advance that window's start to `breakEnd`.
+ */
+function tryPlaceAtPreferredStart(
+  session: Session,
+  freeWindows: Window[],
+  dayPlanId: string,
+  blocks: ScheduleBlock[],
+  preferredStartRaw: Date,
+): boolean {
+  const preferredStart = snapTo30MinuteBoundary(preferredStartRaw);
+  const sessionEnd = addMinutes(preferredStart, FOCUS_SESSION_MINUTES);
+  for (const w of freeWindows) {
+    if (
+      preferredStart.getTime() >= w.start.getTime()
+      && sessionEnd.getTime() <= w.end.getTime()
+    ) {
+      const focusStart = new Date(preferredStart);
+      const focusEnd = addMinutes(focusStart, FOCUS_MINUTES);
+      blocks.push({
+        id: crypto.randomUUID(),
+        dayPlanId,
+        sourceTaskId: session.taskId,
+        sourceDailyRecurringId: null,
+        sourceEventId: null,
+        blockType: "focus",
+        label: session.title,
+        startTimeIso: focusStart.toISOString(),
+        endTimeIso: focusEnd.toISOString(),
+        sequenceIndex: blocks.length + 1,
+        status: "planned",
+      });
+      const breakStart = new Date(focusEnd);
+      const breakEnd = addMinutes(breakStart, BREAK_MINUTES);
+      blocks.push({
+        id: crypto.randomUUID(),
+        dayPlanId,
+        sourceTaskId: null,
+        sourceDailyRecurringId: null,
+        sourceEventId: null,
+        blockType: "break",
+        label: "Break",
+        startTimeIso: breakStart.toISOString(),
+        endTimeIso: breakEnd.toISOString(),
+        sequenceIndex: blocks.length + 1,
+        status: "planned",
+      });
+      w.start = breakEnd;
+      return true;
+    }
+  }
+  return false;
+}
+
 function scheduleFocusAndBreak(
   session: Session,
   freeWindows: Window[],
   dayPlanId: string,
   blocks: ScheduleBlock[],
   unscheduledTasks: UnscheduledTask[],
+  options: GeneratePlanOptions | undefined,
 ): void {
+  if (session.isFirstForTask && options?.preferredFirstFocusStartIsoByTaskId) {
+    const prefIso = options.preferredFirstFocusStartIsoByTaskId[session.taskId];
+    if (prefIso) {
+      const preferredStart = new Date(prefIso);
+      if (
+        !Number.isNaN(preferredStart.getTime())
+        && tryPlaceAtPreferredStart(session, freeWindows, dayPlanId, blocks, preferredStart)
+      ) {
+        return;
+      }
+    }
+  }
+
   const availableWindow = freeWindows.find((candidateWindow) => windowFits(candidateWindow, FOCUS_SESSION_MINUTES));
   if (!availableWindow) {
     unscheduledTasks.push({
@@ -219,6 +305,7 @@ export function generatePlan(
   recurringTaskWindows: FixedEvent[] = [],
   recurringCalendarEvents: FixedEvent[] = [],
   window: PlannerWindow = {},
+  options?: GeneratePlanOptions,
 ): PlannerResult {
   const plannedBlocks: ScheduleBlock[] = [];
   const unscheduledTasks: UnscheduledTask[] = [];
@@ -231,7 +318,7 @@ export function generatePlan(
   addRecurringFocusBreakSessions(recurringTaskWindows, dayPlanId, plannedBlocks);
 
   for (const session of taskSessions) {
-    scheduleFocusAndBreak(session, freeWindows, dayPlanId, plannedBlocks, unscheduledTasks);
+    scheduleFocusAndBreak(session, freeWindows, dayPlanId, plannedBlocks, unscheduledTasks, options);
   }
 
   const orderedBlocks = sortAndReindexBlocks(plannedBlocks);

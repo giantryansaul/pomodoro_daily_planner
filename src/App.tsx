@@ -1,6 +1,6 @@
 import { Apple, Check, Coffee, Minus, Pause, Pencil, Play, Plus, RotateCcw, Save, SkipForward, Trash2, X } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FOCUS_SESSION_MINUTES } from "./planner";
 import { dayStore } from "./dayStore";
 import type { DayBoundaryDefaults, RecurringTemplateKind, ScheduleBlock as Block, TaskStatus, TimerSession } from "./types";
@@ -361,6 +361,69 @@ function countTimelineConflicts(items: CalendarItem[]): number {
   return conflictCount;
 }
 
+type CalendarBoundsRect = { startHour: number; endHour: number; totalMinutes: number };
+
+function snapMinutesToNearestSlot(minutesFromMidnight: number): string {
+  const wrapped = ((minutesFromMidnight % 1440) + 1440) % 1440;
+  let best = TIME_OPTIONS[0]!;
+  let bestDiff = Infinity;
+  for (const t of TIME_OPTIONS) {
+    const m = parseHhmmToMinutes(t);
+    const d = Math.abs(m - wrapped);
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = t;
+    }
+  }
+  return best;
+}
+
+function minutesOfDayFromGridY(yWithinGrid: number, gridHeight: number, bounds: CalendarBoundsRect): number {
+  const frac = gridHeight <= 0 ? 0 : Math.max(0, Math.min(1, yWithinGrid / gridHeight));
+  return bounds.startHour * 60 + frac * bounds.totalMinutes;
+}
+
+function minuteDeltaFromDragDy(deltaY: number, gridHeight: number, bounds: CalendarBoundsRect): number {
+  if (gridHeight <= 0) return 0;
+  return (deltaY / gridHeight) * bounds.totalMinutes;
+}
+
+/** Start of the half-hour window (minutes from midnight) that contains `minutesFromMidnight`. */
+function halfHourSliceStartMin(minutesFromMidnight: number): number {
+  const wrapped = ((minutesFromMidnight % 1440) + 1440) % 1440;
+  return Math.floor(wrapped / 30) * 30;
+}
+
+function calendarItemOverlapsSlice(item: CalendarItem, sliceStartMin: number, sliceEndMin: number): boolean {
+  const itemStartMin = minutesFromDayStart(item.block.startTimeIso);
+  const endIso = item.breakBlock?.endTimeIso ?? item.block.endTimeIso;
+  const itemEndMin = minutesFromDayStart(endIso);
+  return itemStartMin < sliceEndMin && itemEndMin > sliceStartMin;
+}
+
+function isSliceFreeOfItems(sliceStartMin: number, items: CalendarItem[]): boolean {
+  const sliceEndMin = sliceStartMin + 30;
+  return !items.some((item) => calendarItemOverlapsSlice(item, sliceStartMin, sliceEndMin));
+}
+
+/** Clamps the 30m clock slice to the visible grid window; used for band positioning. */
+function emptySlotBandLayout(
+  sliceStartMin: number,
+  bounds: CalendarBoundsRect,
+): { topPct: number; heightPct: number } {
+  const visStartMin = bounds.startHour * 60;
+  const visEndMin = bounds.startHour * 60 + bounds.totalMinutes;
+  const sliceEndMin = sliceStartMin + 30;
+  const clampedStart = Math.max(sliceStartMin, visStartMin);
+  const clampedEnd = Math.min(sliceEndMin, visEndMin);
+  const topRel = clampedStart - visStartMin;
+  const heightRel = Math.max(0, clampedEnd - clampedStart);
+  return {
+    topPct: (topRel / bounds.totalMinutes) * 100,
+    heightPct: (heightRel / bounds.totalMinutes) * 100,
+  };
+}
+
 function TimerCard({
   title,
   variant,
@@ -452,6 +515,29 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [nowTick, setNowTick] = useState(() => Date.now());
 
+  const calendarGridRef = useRef<HTMLDivElement | null>(null);
+  const emptySlotHoverTimerRef = useRef<number | null>(null);
+  const pendingEmptySlotRef = useRef<{ sliceStartMin: number; startHhmm: string } | null>(null);
+  const [emptySlotPopover, setEmptySlotPopover] = useState<{ sliceStartMin: number; startHhmm: string } | null>(null);
+  const [calendarMoveDrag, setCalendarMoveDrag] = useState<{
+    pointerId: number;
+    itemId: string;
+    startClientY: number;
+    previewDeltaMinutes: number;
+  } | null>(null);
+  const [calendarResize, setCalendarResize] = useState<{
+    pointerId: number;
+    blockId: string;
+    startClientY: number;
+    previewEndIso: string;
+  } | null>(null);
+  const [slotAddEventOpen, setSlotAddEventOpen] = useState<{ startHhmm: string; endHhmm: string; title: string } | null>(null);
+  const [slotAddTaskOpen, setSlotAddTaskOpen] = useState<{
+    startHhmm: string;
+    title: string;
+    estimatedPomodoros: number;
+  } | null>(null);
+
   const orderedTimeline = useMemo(() => sortByStartTime(timeline), [timeline]);
   const firstRunnableBlock = useMemo(
     () => orderedTimeline.find((block) => !isNonPomodoroTimelineBlock(block) && block.status !== "completed"),
@@ -539,6 +625,10 @@ function App() {
   );
   const calendarItems = useMemo(() => buildCalendarItems(orderedTimeline), [orderedTimeline]);
   const timelineConflictCount = useMemo(() => countTimelineConflicts(calendarItems), [calendarItems]);
+  const emptySlotBandMetrics = useMemo(() => {
+    if (!emptySlotPopover) return null;
+    return emptySlotBandLayout(emptySlotPopover.sliceStartMin, calendarBounds);
+  }, [emptySlotPopover, calendarBounds]);
 
   useEffect(() => {
     const timerId = window.setInterval(() => {
@@ -614,6 +704,18 @@ function App() {
         status: task.status,
       }));
     });
+  }, []);
+
+  const refreshEventsFromStore = useCallback(async (): Promise<void> => {
+    const ev = await dayStore.getEvents(today);
+    setEvents(
+      ev.events.map((event) => ({
+        clientId: newClientId(),
+        title: event.title,
+        startTime: event.startTimeIso.slice(11, 16),
+        endTime: event.endTimeIso.slice(11, 16),
+      })),
+    );
   }, []);
 
   const calendarNowLineStyle = useMemo((): CSSProperties | null => {
@@ -1201,6 +1303,287 @@ function App() {
       width: `calc(${laneWidth}% - 0.75rem)`,
       right: "auto",
     };
+  }
+
+  function calendarItemStyleResolved(item: CalendarItem): CSSProperties {
+    const base = calendarItemStyle(item);
+    if (
+      calendarResize
+      && calendarResize.blockId === item.block.id
+      && (item.block.blockType === "fixed_event" || item.block.blockType === "recurring_event")
+    ) {
+      const gridHeightPx = (calendarBounds.totalMinutes / 60) * HOUR_HEIGHT_PX;
+      const startMinute = minutesFromDayStart(item.block.startTimeIso) - calendarBounds.startHour * 60;
+      const durationMinutes = Math.max(
+        5,
+        (new Date(calendarResize.previewEndIso).getTime() - new Date(item.block.startTimeIso).getTime()) / 60_000,
+      );
+      const y0 = (startMinute / calendarBounds.totalMinutes) * gridHeightPx;
+      const y1 = ((startMinute + durationMinutes) / calendarBounds.totalMinutes) * gridHeightPx;
+      const gap = CALENDAR_VERTICAL_GAP_PX;
+      const topPx = y0 + gap / 2;
+      const heightPx = Math.max(y1 - y0 - gap, 10);
+      return {
+        ...base,
+        top: `${(topPx / gridHeightPx) * 100}%`,
+        height: `${(heightPx / gridHeightPx) * 100}%`,
+      };
+    }
+    if (calendarMoveDrag?.itemId === item.id && calendarMoveDrag.previewDeltaMinutes !== 0) {
+      const gridHeightPx = (calendarBounds.totalMinutes / 60) * HOUR_HEIGHT_PX;
+      const ty = (calendarMoveDrag.previewDeltaMinutes / calendarBounds.totalMinutes) * gridHeightPx;
+      return { ...base, transform: `translateY(${ty}px)`, zIndex: 15, cursor: "grabbing" };
+    }
+    return base;
+  }
+
+  function handleCalendarGridPointerLeave(): void {
+    if (emptySlotHoverTimerRef.current) {
+      window.clearTimeout(emptySlotHoverTimerRef.current);
+      emptySlotHoverTimerRef.current = null;
+    }
+    setEmptySlotPopover(null);
+    pendingEmptySlotRef.current = null;
+  }
+
+  function handleCalendarGridPointerMove(event: React.PointerEvent<HTMLDivElement>): void {
+    if (calendarMoveDrag || calendarResize) return;
+    const grid = calendarGridRef.current;
+    if (!grid) return;
+    const rect = grid.getBoundingClientRect();
+    const y = event.clientY - rect.top;
+    const rawMin = minutesOfDayFromGridY(y, rect.height, calendarBounds);
+    const sliceStartMin = halfHourSliceStartMin(rawMin);
+    const startHhmm = formatMinutesToHhmm(sliceStartMin);
+
+    if (!isSliceFreeOfItems(sliceStartMin, calendarItems)) {
+      if (emptySlotHoverTimerRef.current) {
+        window.clearTimeout(emptySlotHoverTimerRef.current);
+        emptySlotHoverTimerRef.current = null;
+      }
+      setEmptySlotPopover(null);
+      pendingEmptySlotRef.current = null;
+      return;
+    }
+
+    pendingEmptySlotRef.current = { sliceStartMin, startHhmm };
+    if (emptySlotHoverTimerRef.current) {
+      window.clearTimeout(emptySlotHoverTimerRef.current);
+      emptySlotHoverTimerRef.current = null;
+    }
+    emptySlotHoverTimerRef.current = window.setTimeout(() => {
+      const pending = pendingEmptySlotRef.current;
+      if (pending) {
+        setEmptySlotPopover({
+          sliceStartMin: pending.sliceStartMin,
+          startHhmm: pending.startHhmm,
+        });
+      }
+      emptySlotHoverTimerRef.current = null;
+    }, 70);
+  }
+
+  function clampResizeEndIso(startIso: string, candidateEndIso: string): string {
+    const startH = timeInputFromIso(startIso);
+    const opts = eventEndTimeOptions(startH);
+    if (opts.length === 0) return candidateEndIso;
+    const candMs = new Date(candidateEndIso).getTime();
+    let best = opts[0]!;
+    let bestDiff = Infinity;
+    for (const o of opts) {
+      const om = new Date(isoAtTodayTime(o)).getTime();
+      const d = Math.abs(om - candMs);
+      if (d < bestDiff) {
+        bestDiff = d;
+        best = o;
+      }
+    }
+    return isoAtTodayTime(clampEventEndTime(startH, best));
+  }
+
+  async function refreshTimelineAndRelated(): Promise<void> {
+    const [timelineData, recurringData, timerData] = await Promise.all([
+      dayStore.getTimeline(today),
+      dayStore.getRecurring(today),
+      dayStore.getTimerSession(today),
+    ]);
+    setTimeline(sortByStartTime(timelineData.blocks));
+    setRecurring(normalizeRecurring(recurringData.recurring));
+    setTimer(timerData.session);
+  }
+
+  async function commitCalendarMove(item: CalendarItem, deltaMinutes: number): Promise<void> {
+    if (deltaMinutes === 0) return;
+    const block = item.block;
+    const startMin = minutesFromDayStart(block.startTimeIso) + deltaMinutes;
+    const startHhmm = snapMinutesToNearestSlot(startMin);
+    const startTimeIso = isoAtTodayTime(startHhmm);
+
+    if (item.kind === "focus-session") {
+      const actualBreakEnd = item.breakBlock ? addMinutesIso(addMinutesIso(startTimeIso, 25), 5) : addMinutesIso(startTimeIso, 25);
+      await dayStore.updateFocusSession(today, block.id, {
+        label: block.label.trim(),
+        startTimeIso,
+        focusEndTimeIso: addMinutesIso(startTimeIso, 25),
+        breakEndTimeIso: actualBreakEnd,
+      });
+    } else if (block.blockType === "fixed_event" || block.blockType === "recurring_event") {
+      const durMs = blockEndMs(block) - blockStartMs(block);
+      const endTimeIso = new Date(new Date(startTimeIso).getTime() + durMs).toISOString();
+      await dayStore.updateTimelineEvent(today, block.id, {
+        label: block.label.trim(),
+        startTimeIso,
+        endTimeIso,
+      });
+    }
+    await refreshTasksFromStore();
+    await refreshTimelineAndRelated();
+    if (block.blockType === "fixed_event" || block.blockType === "recurring_event") {
+      await refreshEventsFromStore();
+    }
+  }
+
+  function beginCalendarBlockMove(event: React.PointerEvent, item: CalendarItem): void {
+    if (editingTimelineBlockId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const startY = event.clientY;
+    const pointerId = event.pointerId;
+
+    function onMove(ev: PointerEvent): void {
+      if (ev.pointerId !== pointerId) return;
+      const dy = ev.clientY - startY;
+      const rect = calendarGridRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const deltaMin = minuteDeltaFromDragDy(dy, rect.height, calendarBounds);
+      const snapped = Math.round(deltaMin / 5) * 5;
+      setCalendarMoveDrag({
+        pointerId,
+        itemId: item.id,
+        startClientY: startY,
+        previewDeltaMinutes: snapped,
+      });
+    }
+
+    async function onUp(ev: PointerEvent): Promise<void> {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      const rect = calendarGridRef.current?.getBoundingClientRect();
+      const dy = ev.clientY - startY;
+      const deltaMin = rect ? Math.round(minuteDeltaFromDragDy(dy, rect.height, calendarBounds) / 5) * 5 : 0;
+      setCalendarMoveDrag(null);
+      if (deltaMin !== 0) {
+        await commitCalendarMove(item, deltaMin);
+      }
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    setCalendarMoveDrag({
+      pointerId,
+      itemId: item.id,
+      startClientY: startY,
+      previewDeltaMinutes: 0,
+    });
+  }
+
+  function beginCalendarEventResize(event: React.PointerEvent, block: Block): void {
+    if (editingTimelineBlockId) return;
+    if (block.blockType !== "fixed_event" && block.blockType !== "recurring_event") return;
+    event.preventDefault();
+    event.stopPropagation();
+    const startY = event.clientY;
+    const pointerId = event.pointerId;
+    const originEndIso = block.endTimeIso;
+
+    function onMove(ev: PointerEvent): void {
+      if (ev.pointerId !== pointerId) return;
+      const dy = ev.clientY - startY;
+      const rect = calendarGridRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const deltaMin = minuteDeltaFromDragDy(dy, rect.height, calendarBounds);
+      const candEnd = new Date(blockEndMs(block) + deltaMin * 60_000).toISOString();
+      const snapped = clampResizeEndIso(block.startTimeIso, candEnd);
+      setCalendarResize({
+        pointerId,
+        blockId: block.id,
+        startClientY: startY,
+        previewEndIso: snapped,
+      });
+    }
+
+    async function onUp(ev: PointerEvent): Promise<void> {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      const rect = calendarGridRef.current?.getBoundingClientRect();
+      const dy = ev.clientY - startY;
+      const deltaMin = rect ? minuteDeltaFromDragDy(dy, rect.height, calendarBounds) : 0;
+      const candEnd = new Date(blockEndMs(block) + deltaMin * 60_000).toISOString();
+      const finalEnd = clampResizeEndIso(block.startTimeIso, candEnd);
+      setCalendarResize(null);
+      const durMin =
+        (new Date(finalEnd).getTime() - new Date(block.startTimeIso).getTime()) / 60_000;
+      if (durMin >= MIN_EVENT_DURATION_MIN && durMin <= MAX_EVENT_DURATION_MIN && finalEnd !== originEndIso) {
+        await dayStore.updateTimelineEvent(today, block.id, {
+          label: block.label.trim(),
+          startTimeIso: block.startTimeIso,
+          endTimeIso: finalEnd,
+        });
+        await refreshEventsFromStore();
+        await refreshTimelineAndRelated();
+      }
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    setCalendarResize({
+      pointerId,
+      blockId: block.id,
+      startClientY: startY,
+      previewEndIso: originEndIso,
+    });
+  }
+
+  async function submitCalendarSlotEvent(): Promise<void> {
+    if (!slotAddEventOpen?.title.trim()) return;
+    const { title, startHhmm, endHhmm } = slotAddEventOpen;
+    const safeEnd = clampEventEndTime(startHhmm, endHhmm);
+    const result = await dayStore.appendFixedEventAndGeneratePlan(
+      today,
+      {
+        title: title.trim(),
+        startTimeIso: `${today}T${startHhmm}:00`,
+        endTimeIso: `${today}T${safeEnd}:00`,
+      },
+      { dayStartTimeHhmm: dayStartTime, dayEndTimeHhmm: dayEndTime },
+    );
+    if (result.ok && result.result) {
+      setUnscheduledCount(result.result.unscheduledTasks.length);
+    }
+    setSlotAddEventOpen(null);
+    setEmptySlotPopover(null);
+    await refreshEventsFromStore();
+    await refreshTimelineAndRelated();
+  }
+
+  async function submitCalendarSlotTask(): Promise<void> {
+    if (!slotAddTaskOpen?.title.trim()) return;
+    const { title, startHhmm, estimatedPomodoros } = slotAddTaskOpen;
+    const res = await dayStore.appendTaskWithPreferredStart(
+      today,
+      { title: title.trim(), estimatedPomodoros },
+      startHhmm,
+      { dayStartTimeHhmm: dayStartTime, dayEndTimeHhmm: dayEndTime },
+    );
+    if (res.ok && res.result) {
+      setUnscheduledCount(res.result.unscheduledTasks.length);
+    }
+    setSlotAddTaskOpen(null);
+    setEmptySlotPopover(null);
+    await refreshTasksFromStore();
+    await refreshTimelineAndRelated();
   }
 
   if (loading) {
@@ -1794,7 +2177,12 @@ function App() {
                   </div>
                 ))}
               </div>
-              <div className="calendar-grid">
+              <div
+                ref={calendarGridRef}
+                className="calendar-grid"
+                onPointerMove={handleCalendarGridPointerMove}
+                onPointerLeave={handleCalendarGridPointerLeave}
+              >
                 {calendarHours.map((hour) => (
                   <div
                     key={hour}
@@ -1805,16 +2193,80 @@ function App() {
                 {calendarNowLineStyle && (
                   <div className="calendar-now-line" style={calendarNowLineStyle} aria-hidden="true" />
                 )}
+                {emptySlotPopover && emptySlotBandMetrics && emptySlotBandMetrics.heightPct > 0 && (
+                  <div
+                    key={emptySlotPopover.sliceStartMin}
+                    className="calendar-empty-slot-actions"
+                    style={{
+                      position: "absolute",
+                      left: "0.75rem",
+                      top: `${emptySlotBandMetrics.topPct}%`,
+                      height: `${emptySlotBandMetrics.heightPct}%`,
+                      width: "min(18rem, calc(100% - 1.5rem))",
+                      zIndex: 6,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="calendar-slot-action-btn"
+                      onClick={() => {
+                        if (emptySlotHoverTimerRef.current) {
+                          window.clearTimeout(emptySlotHoverTimerRef.current);
+                          emptySlotHoverTimerRef.current = null;
+                        }
+                        const start = emptySlotPopover.startHhmm;
+                        const rawEnd = formatMinutesToHhmm(parseHhmmToMinutes(start) + MIN_EVENT_DURATION_MIN);
+                        setEmptySlotPopover(null);
+                        setSlotAddEventOpen({
+                          title: "",
+                          startHhmm: start,
+                          endHhmm: clampEventEndTime(start, rawEnd),
+                        });
+                      }}
+                    >
+                      Add event
+                    </button>
+                    <button
+                      type="button"
+                      className="calendar-slot-action-btn"
+                      onClick={() => {
+                        if (emptySlotHoverTimerRef.current) {
+                          window.clearTimeout(emptySlotHoverTimerRef.current);
+                          emptySlotHoverTimerRef.current = null;
+                        }
+                        setEmptySlotPopover(null);
+                        setSlotAddTaskOpen({
+                          title: "",
+                          startHhmm: emptySlotPopover.startHhmm,
+                          estimatedPomodoros: 1,
+                        });
+                      }}
+                    >
+                      Add task
+                    </button>
+                  </div>
+                )}
                 {calendarItems.map((item) => {
                   const block = item.block;
                   const isActive = timer?.activeBlockId === block.id || timer?.activeBlockId === item.breakBlock?.id;
+                  const showResize =
+                    (block.blockType === "fixed_event" || block.blockType === "recurring_event")
+                    && editingTimelineBlockId !== block.id;
                   const itemClassName = `${blockClass(block)}${item.kind === "focus-session" ? " calendar-block-session" : ""}${
                     isActive ? " active" : ""
-                  }${editingTimelineBlockId === block.id ? " editing" : ""}`;
+                  }${editingTimelineBlockId === block.id ? " editing" : ""}${showResize ? " calendar-block-resizable" : ""}`;
 
                   return (
-                    <div key={item.id} className={itemClassName} style={calendarItemStyle(item)}>
-                      <div className="calendar-block-main">
+                    <div key={item.id} className={itemClassName} style={calendarItemStyleResolved(item)}>
+                      <div
+                        className={`calendar-block-main${editingTimelineBlockId === block.id ? "" : " calendar-block-drag-zone"}`}
+                        onPointerDown={
+                          editingTimelineBlockId === block.id
+                            ? undefined
+                            : (e) => beginCalendarBlockMove(e, item)
+                        }
+                        role="presentation"
+                      >
                         <div className="calendar-block-header">
                           <div className="calendar-title-row">
                             <strong className={block.blockType === "focus" ? "calendar-block-time-range" : undefined}>
@@ -1830,6 +2282,8 @@ function App() {
                               <div className="calendar-break-segment calendar-break-segment-inline">
                                 <span>{formatTime(item.breakBlock.startTimeIso)}</span>
                                 <button
+                                  type="button"
+                                  onPointerDown={(e) => e.stopPropagation()}
                                   onClick={() => void playBlock(item.breakBlock.id)}
                                   disabled={item.breakBlock.status === "completed"}
                                   aria-label="Play break"
@@ -1843,6 +2297,7 @@ function App() {
                               <>
                                 <button
                                   type="button"
+                                  onPointerDown={(e) => e.stopPropagation()}
                                   onClick={() => void playBlock(block.id)}
                                   disabled={block.status === "completed"}
                                   aria-label={`Play ${block.label}`}
@@ -1853,6 +2308,7 @@ function App() {
                                 {block.status === "completed" ? (
                                   <button
                                     type="button"
+                                    onPointerDown={(e) => e.stopPropagation()}
                                     onClick={() => void revertBlockFromCalendar(block.id)}
                                     aria-label={`Undo complete ${block.label}`}
                                     title="Undo"
@@ -1862,6 +2318,7 @@ function App() {
                                 ) : (
                                   <button
                                     type="button"
+                                    onPointerDown={(e) => e.stopPropagation()}
                                     onClick={() => void completeBlock(block.id)}
                                     aria-label={`Complete ${block.label}`}
                                     title="Completed"
@@ -1872,14 +2329,23 @@ function App() {
                               </>
                             )}
                             {block.blockType !== "break" && editingTimelineBlockId !== block.id && (
-                              <button onClick={() => beginTimelineEdit(block)} aria-label={`Edit ${block.label}`} title="Edit">
+                              <button
+                                type="button"
+                                onPointerDown={(e) => e.stopPropagation()}
+                                onClick={() => beginTimelineEdit(block)}
+                                aria-label={`Edit ${block.label}`}
+                                title="Edit"
+                              >
                                 <Pencil size={16} aria-hidden="true" />
                               </button>
                             )}
                           </div>
                         </div>
                         {block.blockType !== "break" && editingTimelineBlockId === block.id && (
-                          <div className="calendar-edit-row">
+                          <div
+                            className="calendar-edit-row"
+                            onPointerDown={(e) => e.stopPropagation()}
+                          >
                             <input
                               value={timelineEditDraft.label}
                               onChange={(event) => setTimelineEditDraft((current) => ({ ...current, label: event.target.value }))}
@@ -1899,10 +2365,11 @@ function App() {
                                 aria-label="Timeline end time"
                               />
                             )}
-                            <button onClick={() => void saveTimelineEdit(block)} aria-label="Save timeline label">
+                            <button type="button" onClick={() => void saveTimelineEdit(block)} aria-label="Save timeline label">
                               <Check size={16} aria-hidden="true" />
                             </button>
                             <button
+                              type="button"
                               onClick={() => {
                                 setEditingTimelineBlockId(null);
                                 setTimelineEditDraft({ label: "", startTime: "", endTime: "" });
@@ -1914,12 +2381,162 @@ function App() {
                           </div>
                         )}
                       </div>
+                      {showResize && (
+                        <div
+                          className="calendar-event-resize-handle"
+                          onPointerDown={(e) => beginCalendarEventResize(e, block)}
+                          role="separator"
+                          aria-orientation="horizontal"
+                          aria-label={`Resize ${block.label}`}
+                        />
+                      )}
                     </div>
                   );
                 })}
               </div>
             </div>
           </div>
+
+          {slotAddEventOpen && (
+            <div
+              className="calendar-slot-modal-overlay"
+              role="presentation"
+              onClick={() => setSlotAddEventOpen(null)}
+            >
+              <div
+                className="calendar-slot-modal panel"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Add calendar event"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h4>New event</h4>
+                <label className="calendar-slot-modal-field">
+                  <span>Title</span>
+                  <input
+                    value={slotAddEventOpen.title}
+                    onChange={(e) =>
+                      setSlotAddEventOpen((current) => (current ? { ...current, title: e.target.value } : current))
+                    }
+                    placeholder="Meeting title"
+                    autoFocus
+                  />
+                </label>
+                <div className="calendar-slot-modal-times">
+                  <label>
+                    <span>Start</span>
+                    <select
+                      value={slotAddEventOpen.startHhmm}
+                      onChange={(e) => {
+                        const startHhmm = e.target.value;
+                        setSlotAddEventOpen((current) =>
+                          current
+                            ? {
+                                ...current,
+                                startHhmm,
+                                endHhmm: clampEventEndTime(startHhmm, current.endHhmm),
+                              }
+                            : current,
+                        );
+                      }}
+                      aria-label="Event start"
+                    >
+                      {TIME_OPTIONS.map((time) => (
+                        <option key={time} value={time}>{formatSelectTime(time)}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>End</span>
+                    <select
+                      value={
+                        eventEndTimeOptions(slotAddEventOpen.startHhmm).includes(slotAddEventOpen.endHhmm)
+                          ? slotAddEventOpen.endHhmm
+                          : clampEventEndTime(slotAddEventOpen.startHhmm, slotAddEventOpen.endHhmm)
+                      }
+                      onChange={(e) =>
+                        setSlotAddEventOpen((current) =>
+                          current
+                            ? {
+                                ...current,
+                                endHhmm: clampEventEndTime(current.startHhmm, e.target.value),
+                              }
+                            : current,
+                        )
+                      }
+                      aria-label="Event end"
+                    >
+                      {eventEndTimeOptions(slotAddEventOpen.startHhmm).map((time) => (
+                        <option key={time} value={time}>{formatEndOptionLabel(slotAddEventOpen.startHhmm, time)}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="calendar-slot-modal-actions">
+                  <button type="button" className="calendar-slot-modal-cancel" onClick={() => setSlotAddEventOpen(null)}>
+                    Cancel
+                  </button>
+                  <button type="button" onClick={() => void submitCalendarSlotEvent()}>
+                    Save event
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {slotAddTaskOpen && (
+            <div
+              className="calendar-slot-modal-overlay"
+              role="presentation"
+              onClick={() => setSlotAddTaskOpen(null)}
+            >
+              <div
+                className="calendar-slot-modal panel"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Add task"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h4>New task</h4>
+                <label className="calendar-slot-modal-field">
+                  <span>Title</span>
+                  <input
+                    value={slotAddTaskOpen.title}
+                    onChange={(e) =>
+                      setSlotAddTaskOpen((current) => (current ? { ...current, title: e.target.value } : current))
+                    }
+                    placeholder="Task title"
+                    autoFocus
+                  />
+                </label>
+                <label className="calendar-slot-modal-field">
+                  <span>Pomodoros</span>
+                  <select
+                    value={slotAddTaskOpen.estimatedPomodoros}
+                    onChange={(e) =>
+                      setSlotAddTaskOpen((current) =>
+                        current ? { ...current, estimatedPomodoros: Number(e.target.value) } : current,
+                      )
+                    }
+                    aria-label="Estimated pomodoros"
+                  >
+                    {POMODORO_OPTIONS.map((n) => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                </label>
+                <p className="muted">Starts near {formatSelectTime(slotAddTaskOpen.startHhmm)} (planner will snap to a free slot when needed).</p>
+                <div className="calendar-slot-modal-actions">
+                  <button type="button" className="calendar-slot-modal-cancel" onClick={() => setSlotAddTaskOpen(null)}>
+                    Cancel
+                  </button>
+                  <button type="button" onClick={() => void submitCalendarSlotTask()}>
+                    Add task
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="timeline-timer-column">
             <div className="timeline-timer-sticky">

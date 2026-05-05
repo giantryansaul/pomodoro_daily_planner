@@ -1,4 +1,4 @@
-import { FOCUS_SESSION_MINUTES, generatePlan } from "./planner";
+import { type GeneratePlanOptions, FOCUS_SESSION_MINUTES, generatePlan } from "./planner";
 import { StorageKeys, readJson, writeJson } from "./storage/local";
 import type {
   DailyRecurringItem,
@@ -92,7 +92,7 @@ function normalizeRecurringTemplate(template: RecurringTemplate): RecurringTempl
   if (kind === "calendar_event") {
     return { ...template, kind, estimatedPomodoros: null };
   }
-  let pomos =
+  const pomos =
     template.estimatedPomodoros != null && template.estimatedPomodoros >= 1
       ? clampRecurringPomodoros(template.estimatedPomodoros)
       : template.startTimeHhmm && template.endTimeHhmm && HHMM_PATTERN.test(template.startTimeHhmm) && HHMM_PATTERN.test(template.endTimeHhmm)
@@ -334,7 +334,11 @@ function replacePlannedTimeline(bundle: DayBundle, newPlannedBlocks: ScheduleBlo
   bundle.timeline = [...completedBlocks, ...newPlannedBlocks];
 }
 
-function generateAndPersist(bundle: DayBundle, plannerWindow: PlannerWindowInput): PlannerResult {
+function generateAndPersist(
+  bundle: DayBundle,
+  plannerWindow: PlannerWindowInput,
+  planOptions?: GeneratePlanOptions,
+): PlannerResult {
   const recurringTaskWindows: FixedEvent[] = [];
   const recurringCalendarEvents: FixedEvent[] = [];
   for (const item of bundle.dailyRecurring) {
@@ -354,6 +358,7 @@ function generateAndPersist(bundle: DayBundle, plannerWindow: PlannerWindowInput
     recurringTaskWindows,
     recurringCalendarEvents,
     parsePlannerWindow(plannerWindow),
+    planOptions,
   );
   replacePlannedTimeline(bundle, result.blocks);
   writeDayBundle(bundle);
@@ -754,6 +759,62 @@ export const dayStore = {
     return generateAndPersist(bundle, parsePlannerWindow(plannerWindow));
   },
 
+  /**
+   * Prepends a task (priority 1) and regenerates the timeline with a preferred start for its first focus block.
+   */
+  async appendTaskWithPreferredStart(
+    dateIso: string,
+    input: TaskInput,
+    preferredStartHhmm: string,
+    plannerWindow: PlannerWindowInput,
+  ): Promise<{ ok: boolean; taskId?: string; result?: PlannerResult }> {
+    const title = typeof input.title === "string" ? input.title.trim() : "";
+    if (!title) return { ok: false };
+    if (!HHMM_PATTERN.test(preferredStartHhmm)) return { ok: false };
+    const bundle = loadOrCreateDayBundle(dateIso);
+    const taskId = newId();
+    const newTask: Task = {
+      id: taskId,
+      dayPlanId: bundle.id,
+      title,
+      notes: input.notes ?? null,
+      priorityRank: 1,
+      estimatedPomodoros: input.estimatedPomodoros ?? null,
+      status: "pending",
+    };
+    const bumped = bundle.tasks.map((task) => ({ ...task, priorityRank: task.priorityRank + 1 }));
+    bundle.tasks = [newTask, ...bumped];
+    const preferredIso = new Date(`${dateIso}T${preferredStartHhmm}:00`).toISOString();
+    const result = generateAndPersist(bundle, parsePlannerWindow(plannerWindow), {
+      preferredFirstFocusStartIsoByTaskId: { [taskId]: preferredIso },
+    });
+    return { ok: true, taskId, result };
+  },
+
+  /** Appends one fixed event and regenerates the planned timeline. */
+  async appendFixedEventAndGeneratePlan(
+    dateIso: string,
+    input: EventInput,
+    plannerWindow: PlannerWindowInput,
+  ): Promise<{ ok: boolean; result?: PlannerResult }> {
+    const title = input.title.trim();
+    const startMs = new Date(input.startTimeIso).getTime();
+    const endMs = new Date(input.endTimeIso).getTime();
+    if (!title || Number.isNaN(startMs) || Number.isNaN(endMs) || startMs >= endMs) {
+      return { ok: false };
+    }
+    const bundle = loadOrCreateDayBundle(dateIso);
+    bundle.fixedEvents.push({
+      id: newId(),
+      dayPlanId: bundle.id,
+      title,
+      startTimeIso: input.startTimeIso,
+      endTimeIso: input.endTimeIso,
+    });
+    const result = generateAndPersist(bundle, parsePlannerWindow(plannerWindow));
+    return { ok: true, result };
+  },
+
   async resetAndGenerate(dateIso: string, plannerWindow: PlannerWindowInput): Promise<PlannerResult> {
     const bundle = loadOrCreateDayBundle(dateIso);
     bundle.timeline = [];
@@ -958,6 +1019,20 @@ export const dayStore = {
         ? { ...block, label, startTimeIso: input.startTimeIso, endTimeIso: input.endTimeIso }
         : block,
     );
+
+    if (target.blockType === "fixed_event" && target.sourceEventId) {
+      const eventId = target.sourceEventId;
+      bundle.fixedEvents = bundle.fixedEvents.map((event) =>
+        event.id === eventId
+          ? {
+              ...event,
+              title: label,
+              startTimeIso: input.startTimeIso,
+              endTimeIso: input.endTimeIso,
+            }
+          : event,
+      );
+    }
 
     if (target.blockType === "recurring_event" && target.sourceDailyRecurringId) {
       const startHhmm = hhmmFromIsoLocal(input.startTimeIso);
